@@ -1,0 +1,1835 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Motion Gym</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+
+<!--
+  MOTION GYM - webcam full-body workout obstacle course (2 players, single file)
+
+  Tracking : MediaPipe Tasks Vision PoseLandmarker (numPoses: 2)
+             https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/
+
+  Glove art: Twemoji "boxing glove" (1f94a), recolored per player and inlined
+             as a data-URI so this file stays self-contained.
+             Graphics (c) Twitter, Inc and other contributors.
+             Licensed under CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
+             Source: https://github.com/twitter/twemoji
+
+  NOTE: getUserMedia needs a secure context. Opening this as file:// will NOT
+  work in Chrome. Serve it over localhost:
+      python3 -m http.server 8777 --directory .
+  then open http://localhost:8777
+-->
+
+<style>
+  :root{
+    --ink:#171B17; --cream:#F0EDE4; --panel:#252B27; --muted:#666B65;
+    --lime:#C6FF48; --white:#fff;
+    --p1:#18A694; --p1-pale:#C5F0ED;
+    --p2:#FF775F; --p2-pale:#FFC8B9;
+    --display:"Archivo Black",system-ui,sans-serif;
+    --body:"DM Sans",system-ui,-apple-system,sans-serif;
+    --edge:2px solid var(--ink);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--cream);color:var(--ink);
+            font-family:var(--body);-webkit-font-smoothing:antialiased}
+  video{position:fixed;left:-9999px;top:-9999px;width:2px;height:2px}
+  b,strong{font-weight:700}
+
+  .k{font-size:10px;letter-spacing:.22em;font-weight:700;color:var(--muted);text-transform:uppercase}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:none;
+       border:2px solid var(--ink);background:var(--lime)}
+
+  /* ============================ app chrome ============================ */
+  #app{position:fixed;inset:0;display:none;grid-template-rows:auto auto 1fr auto;
+       gap:10px;padding:12px 14px 10px;z-index:2}
+  #app.on{display:grid}
+
+  /* --- top bar --- */
+  #topbar{display:flex;align-items:center;gap:14px;border-bottom:var(--edge);padding-bottom:10px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .mark{width:34px;height:34px;background:var(--ink);display:grid;place-items:center;flex:none}
+  .mark svg{width:17px;height:17px;fill:var(--lime)}
+  .word{font-family:var(--display);font-size:21px;letter-spacing:-.02em;line-height:1}
+  .word em{font-style:normal;color:var(--p2)}
+  .spacer{flex:1}
+  .stat{display:flex;align-items:baseline;gap:7px}
+  .stat b{font-family:var(--display);font-size:22px;line-height:1;font-variant-numeric:tabular-nums}
+  .iconbtn{font:inherit;font-size:10px;letter-spacing:.18em;font-weight:700;cursor:pointer;
+           background:none;border:var(--edge);padding:7px 11px;color:var(--ink)}
+  .iconbtn[aria-pressed="true"]{background:var(--ink);color:var(--lime)}
+
+  /* --- player bar --- */
+  #playbar{display:grid;grid-template-columns:1fr auto 1fr;align-items:stretch;gap:0}
+  .pcard{border:var(--edge);padding:9px 13px 10px;display:flex;flex-direction:column;gap:3px;
+         min-width:0;background:var(--c-pale)}
+  .pcard.p1{--c:var(--p1);--c-pale:var(--p1-pale)}
+  .pcard.p2{--c:var(--p2);--c-pale:var(--p2-pale);text-align:right}
+  .pcard .dot{background:var(--c)}
+  .r1{display:flex;align-items:center;gap:8px}
+  .pcard.p2 .r1{flex-direction:row-reverse}
+  .plabel{font-size:10.5px;letter-spacing:.24em;font-weight:700}
+  .scorebox{margin-left:auto;display:flex;align-items:baseline;gap:8px}
+  .pcard.p2 .scorebox{margin-left:0;margin-right:auto;flex-direction:row-reverse}
+  .scorebox b{font-family:var(--display);font-size:clamp(23px,3.1vw,34px);line-height:.9;
+              font-variant-numeric:tabular-nums}
+  .pname{font-family:var(--display);font-size:clamp(17px,2.3vw,26px);line-height:1;letter-spacing:-.01em}
+  .r2{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-height:22px}
+  .pcard.p2 .r2{flex-direction:row-reverse}
+  .chip{font-size:10px;letter-spacing:.14em;font-weight:700;padding:3px 8px;border:var(--edge);
+        background:var(--white);white-space:nowrap}
+  .chip.solid{background:var(--ink);color:var(--lime)}
+  .cue{font-family:var(--display);font-size:13px;letter-spacing:.02em;
+       overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .warnchip{font-size:9.5px;letter-spacing:.16em;font-weight:700;padding:3px 8px;
+            background:var(--p2);color:var(--white);border:var(--edge)}
+
+  /* the VS diamond between the two player cards */
+  .vs{width:0;display:grid;place-items:center;position:relative;z-index:3}
+  .vs i{position:absolute;width:44px;height:44px;background:var(--ink);transform:rotate(45deg);
+        display:block;border:3px solid var(--cream)}
+  .vs span{position:relative;font-family:var(--display);font-size:12px;color:var(--white);letter-spacing:.08em}
+
+  /* --- stage --- */
+  #stagewrap{position:relative;border:var(--edge);background:var(--panel);overflow:hidden;min-height:0}
+  #stage{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .brk{position:absolute;width:30px;height:30px;border:3px solid var(--lime);pointer-events:none;z-index:2}
+  .brk.tl{top:11px;left:11px;border-right:0;border-bottom:0}
+  .brk.tr{top:11px;right:11px;border-left:0;border-bottom:0}
+  .brk.bl{bottom:11px;left:11px;border-right:0;border-top:0}
+  .brk.br{bottom:11px;right:11px;border-left:0;border-top:0}
+  #toast{position:absolute;left:0;right:0;bottom:16px;text-align:center;z-index:3;
+         font-size:11px;letter-spacing:.16em;font-weight:700;color:var(--lime);pointer-events:none}
+  #toast:empty{display:none}
+  #fps{position:absolute;top:13px;right:50px;z-index:3;font-size:10px;letter-spacing:.14em;
+       font-weight:700;color:rgba(255,255,255,.4);font-variant-numeric:tabular-nums}
+
+  /* calibration banner, drawn OVER the stage so you can see yourself */
+  #calibOverlay{position:absolute;inset:0;z-index:4;display:none;
+                background:linear-gradient(180deg,rgba(23,27,23,.9),rgba(23,27,23,.58) 45%,rgba(23,27,23,.9));
+                padding:26px;place-items:center}
+  #calibOverlay.on{display:grid}
+  .calbox{text-align:center;max-width:720px;width:100%}
+  .calkick{font-size:10.5px;letter-spacing:.26em;font-weight:700;color:var(--lime)}
+  #calNum{font-family:var(--display);font-size:clamp(62px,13vw,132px);line-height:.85;color:var(--white)}
+  .calsub{color:rgba(255,255,255,.72);font-size:13px;margin:6px 0 0;line-height:1.5}
+  .slots{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}
+  .slot{border:3px solid var(--c);padding:9px 12px;text-align:left;background:rgba(23,27,23,.72)}
+  .slot.p1{--c:var(--p1)} .slot.p2{--c:var(--p2)}
+  .slot .st{font-size:10px;letter-spacing:.22em;font-weight:700;color:var(--c)}
+  .slot .sv{font-size:12.5px;margin-top:3px;color:rgba(255,255,255,.76);line-height:1.4}
+  .slot.ready{background:var(--c)}
+  .slot.ready .st,.slot.ready .sv{color:var(--ink)}
+
+  /* --- bottom bar --- */
+  #botbar{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;
+          border-top:var(--edge);padding-top:8px}
+  .repstrip{display:flex;gap:9px;flex-wrap:wrap;font-size:9.5px;letter-spacing:.12em;font-weight:700;
+            color:var(--muted);min-width:0}
+  .repstrip.p2{justify-content:flex-end}
+  .repstrip b{color:var(--ink);font-variant-numeric:tabular-nums;margin-left:3px}
+  .keys{font-size:9.5px;letter-spacing:.14em;font-weight:700;color:var(--muted);white-space:nowrap}
+
+  /* ============================ full screens ============================ */
+  .screen{position:fixed;inset:0;z-index:5;display:none;overflow:auto;background:var(--cream)}
+  .screen.on{display:block}
+  .wrap{max-width:1080px;margin:0 auto;padding:26px 24px 44px}
+  .rule{border-bottom:var(--edge);padding-bottom:12px;margin-bottom:18px;
+        display:flex;align-items:center;gap:14px}
+  .kick{font-size:11px;letter-spacing:.26em;font-weight:700;color:var(--muted)}
+  h1{font-family:var(--display);font-weight:400;margin:6px 0 0;
+     font-size:clamp(40px,7.6vw,86px);line-height:.92;letter-spacing:-.025em}
+  h1 em{font-style:normal;color:var(--p2)}
+  .lede{margin:14px 0 0;font-size:clamp(13.5px,1.5vw,16px);line-height:1.6;max-width:68ch;color:#2c322c}
+  .lede b{font-weight:700}
+  .tagmint{background:var(--p1-pale);padding:1px 6px;border:1px solid var(--ink);white-space:nowrap}
+  .tagsalmon{background:var(--p2-pale);padding:1px 6px;border:1px solid var(--ink);white-space:nowrap}
+
+  .note{margin-top:16px;border:var(--edge);border-left-width:9px;border-left-color:var(--lime);
+        background:var(--white);padding:12px 15px;font-size:13px;line-height:1.55}
+  .note.bad{border-left-color:var(--p2)}
+  .note code{background:var(--cream);border:1px solid var(--ink);padding:1px 6px;font-size:12px}
+
+  .grid{margin:22px 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(214px,1fr));gap:9px}
+  .move{border:var(--edge);background:var(--white);padding:11px 13px;display:flex;gap:11px;align-items:flex-start}
+  .move .gl{font-family:var(--display);font-size:17px;line-height:1;margin-top:1px}
+  .move .mt{font-family:var(--display);font-size:12.5px;letter-spacing:.03em}
+  .move .md{color:var(--muted);font-size:11px;margin-top:3px;line-height:1.45}
+  .move .pip{width:9px;height:9px;border-radius:50%;background:var(--c,var(--p1));margin-left:auto;flex:none;
+             border:1.5px solid var(--ink)}
+
+  /* chunky button with the hard lime offset */
+  .btn{margin-top:26px;font-family:var(--display);font-size:16px;letter-spacing:.06em;cursor:pointer;
+       padding:0;border:var(--edge);background:var(--ink);color:var(--white);
+       display:inline-flex;align-items:stretch;box-shadow:7px 7px 0 var(--lime);transition:.08s}
+  .btn span{padding:15px 26px}
+  .btn i{display:grid;place-items:center;padding:0 15px;background:var(--lime);color:var(--ink);
+         border-left:var(--edge);font-style:normal;font-size:15px}
+  .btn:hover{transform:translate(2px,2px);box-shadow:5px 5px 0 var(--lime)}
+  .btn:active{transform:translate(7px,7px);box-shadow:0 0 0 var(--lime)}
+  .btn:disabled{opacity:.45;cursor:progress;transform:none;box-shadow:7px 7px 0 var(--lime)}
+  .btn.ghost{background:var(--cream);color:var(--ink);box-shadow:7px 7px 0 var(--ink)}
+  .btn.ghost i{background:var(--ink);color:var(--cream)}
+  .btn.ghost:hover{box-shadow:5px 5px 0 var(--ink)}
+  .btnrow{display:flex;gap:22px;flex-wrap:wrap;align-items:center}
+  .fine{margin-top:14px;font-size:11.5px;color:var(--muted);line-height:1.6;max-width:78ch}
+
+  /* --- summary --- */
+  .totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(136px,1fr));gap:9px;margin-top:20px}
+  .tot{border:var(--edge);background:var(--white);padding:12px 14px}
+  .tot.mint{background:var(--p1-pale)} .tot.salmon{background:var(--p2-pale)}
+  .tot .tv{font-family:var(--display);font-size:clamp(25px,3.4vw,36px);line-height:1;font-variant-numeric:tabular-nums}
+  .tot .tl{font-size:9.5px;letter-spacing:.2em;color:var(--muted);margin-top:6px;font-weight:700}
+  table{width:100%;border-collapse:collapse;margin-top:22px;font-size:13px;border:var(--edge)}
+  th,td{padding:8px 11px;text-align:right;border-bottom:1px solid rgba(23,27,23,.16)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;background:var(--ink);color:var(--cream);
+           border-bottom:0;font-weight:700}
+  tbody tr:last-child td{border-bottom:0;font-weight:700;background:var(--white)}
+  td.v1{color:var(--p1);font-weight:700;font-variant-numeric:tabular-nums}
+  td.v2{color:var(--p2);font-weight:700;font-variant-numeric:tabular-nums}
+
+  @media (max-width:720px){
+    #playbar{grid-template-columns:1fr}
+    .vs{display:none}
+    .pcard.p2{text-align:left}
+    .pcard.p2 .r1,.pcard.p2 .r2,.pcard.p2 .scorebox{flex-direction:row}
+    .pcard.p2 .scorebox{margin-left:auto;margin-right:0}
+    #botbar{grid-template-columns:1fr}
+    .repstrip.p2{justify-content:flex-start}
+  }
+</style>
+</head>
+<body>
+
+<video id="cam" playsinline muted></video>
+
+<!-- ======================== in-game chrome ======================== -->
+<div id="app">
+
+  <header id="topbar">
+    <div class="brand">
+      <span class="mark"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg></span>
+      <span class="word">MOTION<em>GYM</em></span>
+    </div>
+    <div class="spacer"></div>
+    <div class="stat"><span class="k">Wave</span><b id="wave">1</b></div>
+    <div class="stat"><span class="k">Time</span><b id="clock">5:00</b></div>
+    <button class="iconbtn" id="skelBtn" aria-pressed="true">SKELETON</button>
+    <button class="iconbtn" id="sndBtn" aria-pressed="true">SOUND</button>
+  </header>
+
+  <div id="playbar">
+    <div class="pcard p1">
+      <div class="r1">
+        <span class="dot"></span><span class="plabel">PLAYER 01</span>
+        <span class="scorebox"><span class="k">Score</span><b id="s1">0000</b></span>
+      </div>
+      <div class="pname">NOVA</div>
+      <div class="r2">
+        <span class="chip solid" id="c1">x1</span>
+        <span class="chip" id="a1">0% HIT</span>
+        <span class="cue" id="n1"></span>
+        <span id="b1"></span>
+      </div>
+    </div>
+
+    <div class="vs"><i></i><span>VS</span></div>
+
+    <div class="pcard p2">
+      <div class="r1">
+        <span class="dot"></span><span class="plabel">PLAYER 02</span>
+        <span class="scorebox"><span class="k">Score</span><b id="s2">0000</b></span>
+      </div>
+      <div class="pname">BLAZE</div>
+      <div class="r2">
+        <span class="chip solid" id="c2">x1</span>
+        <span class="chip" id="a2">0% HIT</span>
+        <span class="cue" id="n2"></span>
+        <span id="b2"></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="stagewrap">
+    <canvas id="stage"></canvas>
+    <span class="brk tl"></span><span class="brk tr"></span>
+    <span class="brk bl"></span><span class="brk br"></span>
+    <div id="fps">-- FPS</div>
+    <div id="toast"></div>
+
+    <div id="calibOverlay">
+      <div class="calbox">
+        <div class="calkick">STAND STILL &mdash; ARMS DOWN, FEET TOGETHER</div>
+        <div id="calNum">3</div>
+        <p class="calsub">Measuring each body so squat depth and rep thresholds scale to <i>you</i>.</p>
+        <div class="slots">
+          <div class="slot p1" id="slot1"><div class="st">PLAYER 01 &middot; NOVA</div><div class="sv">looking&hellip;</div></div>
+          <div class="slot p2" id="slot2"><div class="st">PLAYER 02 &middot; BLAZE</div><div class="sv">looking&hellip;</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer id="botbar">
+    <div class="repstrip p1" id="r1"></div>
+    <div class="keys">C RECALIBRATE &middot; S SKELETON &middot; M MUTE &middot; P PAUSE &middot; E END</div>
+    <div class="repstrip p2" id="r2"></div>
+  </footer>
+</div>
+
+<!-- ============================= START ============================= -->
+<div class="screen on" id="screen-start">
+  <div class="wrap">
+    <div class="rule">
+      <span class="mark"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg></span>
+      <span class="word">MOTION<em>GYM</em></span>
+      <div class="spacer"></div>
+      <span class="kick">TWO PLAYERS &middot; ONE CAMERA</span>
+    </div>
+
+    <div class="kick">FULL-BODY OBSTACLE COURSE</div>
+    <h1>GET <em>READY!</em></h1>
+    <p class="lede">
+      Stand <b>side by side</b> in front of the webcam. The left half of the mirrored view is
+      <span class="tagmint">PLAYER 01 &middot; NOVA</span>, the right half is
+      <span class="tagsalmon">PLAYER 02 &middot; BLAZE</span>. Obstacles rush toward you and the
+      <b>type decides the move</b>. Clear it in time to score; chain clears to build a multiplier up to x8.
+    </p>
+
+    <div class="note" id="startNote">
+      <b>Framing matters.</b> Step back until your <b>whole body, head to ankles</b> is in frame &mdash;
+      every rep is measured against your own body size. Good light, and a clear metre of floor each.
+      This is camera AR on a screen, not a headset: obstacles scale up as they approach.
+    </div>
+
+    <div class="grid" id="moveGuide"></div>
+
+    <div class="btnrow">
+      <button class="btn" id="go"><span>ENABLE CAMERA</span><i>&#9673;</i></button>
+    </div>
+    <p class="fine" id="loadMsg"></p>
+  </div>
+</div>
+
+<!-- ============================ SUMMARY ============================ -->
+<div class="screen" id="screen-summary">
+  <div class="wrap">
+    <div class="rule">
+      <span class="mark"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg></span>
+      <span class="word">MOTION<em>GYM</em></span>
+      <div class="spacer"></div>
+      <span class="kick">SESSION COMPLETE</span>
+    </div>
+    <div class="kick">FINAL</div>
+    <h1 id="winner">WORKOUT COMPLETE</h1>
+    <div class="totals" id="totals"></div>
+    <table><thead><tr><th>Exercise</th><th>Nova &middot; P1</th><th>Blaze &middot; P2</th></tr></thead>
+      <tbody id="repTable"></tbody></table>
+    <p class="fine" id="calNote"></p>
+    <div class="btnrow">
+      <button class="btn" id="again"><span>GO AGAIN</span><i>&#8635;</i></button>
+      <button class="btn ghost" id="recal"><span>RECALIBRATE</span><i>&#9678;</i></button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, PoseLandmarker }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs";
+
+const WASM  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/" +
+              "pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+
+/* ===================================================================
+   TUNING - every threshold is a fraction of the player's own torso
+   length (shoulder-mid to hip-mid), so it scales with body size and
+   distance from the camera. Tweak here, nowhere else.
+=================================================================== */
+const T = {
+  squat:   { enter:0.40, exit:0.15, upright:0.72 },
+  jack:    { enter:0.45, exit:0.20, armsUp:0.15  },
+  knee:    { enter:0.35, exit:0.15 },
+  reach:   { above:0.10 },
+  dodge:   { enter:0.45, exit:0.20 },
+  lunge:   { spread:0.80, drop:0.25, shift:0.30, exitDrop:0.12 },
+  hop:     { cross:0.35, lift:0.15 },
+  // speed in torso-lengths/s; box half-size; min arm extension; how far out
+  // from the shoulder the hand must be; how far above the shoulder it may go
+  punch:   { speed:2.0, box:0.22, extend:0.62, outward:0.45, overhead:0.25 },
+  combo:   { straight:0.82, window:2600 },
+  refract: 260,                              // ms between reps of the same move
+  framing: { ankleVis:0.25, ankleY:0.985 },
+  glove:   0.55,                             // sprite size in torso-lengths
+  waveSecs: 45,
+  sessionSecs: 300,
+};
+
+/* ===================== glove sprite (Twemoji) ===================== */
+const GLOVE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36">' +
+'<path fill="#BE1931" d="M19.598.326c9.613 0 12.243 1.697 12.243 11.311 0 5.506-1.167 8.488-1.167 13.488 0 2.958-4.551 3-8.659 3-4.218 0-9.142.199-11.341-2-6-6-10.545-16.449-2-19C9.129.614 9.984.326 19.598.326z"/>' +
+'<path fill="#99AAB5" d="M26.736 26c2.229 0 4.264.858 4.264 2.903v3.519C31 34.467 28.965 36 26.736 36H15V26h11.736z"/>' +
+'<path fill="#CCD6DD" d="M22.341 26c2.454 0 4.659.858 4.659 2.903v3.519C27 34.467 24.795 36 22.341 36h-7.333C12.553 36 11 34.467 11 32.422v-3.519C11 26.858 12.553 26 15.008 26h7.333z"/>' +
+'<path fill="#A0041E" d="M4.292 10.948c.715-.575 1.862-1.424 2.383 1.178 1 5 3.794 9.384 3 7-1-3-1-12-1-12-2.437.727-3.806 2.097-4.383 3.822z"/>' +
+'<path fill="#E1E8ED" d="M21.674 28c1.105 0 2.326.538 2.326 1.459v3.333c0 .92-1.221 1.208-2.326 1.208h-5C15.57 34 15 33.712 15 32.792v-3.333c0-.921.57-1.459 1.674-1.459h5z"/></svg>';
+
+const COL = [
+  { main:'#18A694', shade:'#0E7A6C', pale:'#C5F0ED', name:'NOVA'  },
+  { main:'#FF775F', shade:'#D2503A', pale:'#FFC8B9', name:'BLAZE' },
+];
+// shared ink / surface tokens, mirrored from the CSS so canvas matches chrome
+const INK = '#171B17', PANEL = '#252B27', LIME = '#C6FF48', PAPER = '#F0EDE4';
+const DISPLAY = '"Archivo Black",system-ui,sans-serif';
+function gloveImage(c){
+  const svg = GLOVE_SVG.replace(/#BE1931/g, c.main).replace(/#A0041E/g, c.shade);
+  const img = new Image();
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  return img;
+}
+const GLOVES = COL.map(gloveImage);
+
+/* ======================= obstacle catalogue ======================= */
+// mode: 'hit' = punch collision | 'rep' = N reps inside window
+//       'state' = hold a state  | 'combo' = ordered punch sequence
+// sided: obstacle picks a side. away=true means "move the OTHER way"
+// (dodge a wall); away=false means "move toward the mark" (side lunge).
+const OB = {
+  ICE:   { label:'PUNCH',        mode:'hit',   wave:1, col:'#C6FF48', yb:0.26, win:[.70,1.06], pts:100 },
+  LOWBAR:{ label:'SQUAT',        mode:'rep',   key:'squat', need:1, wave:1, col:'#FFFFFF', yb:0.30, win:[.62,1.08], pts:160 },
+  GATE:  { label:'JUMPING JACK', mode:'rep',   key:'jack',  need:1, wave:1, col:'#C6FF48', yb:0.22, win:[.60,1.08], pts:160 },
+  WALL:  { label:'DODGE',        mode:'state', key:'dodge', wave:2, col:'#FF775F', yb:0.20, win:[.66,1.06], pts:120, sided:true, away:true },
+  STAR:  { label:'REACH UP',     mode:'state', key:'reach', wave:2, col:'#C6FF48', yb:0.44, win:[.66,1.08], pts:110 },
+  KNEES: { label:'HIGH KNEES',   mode:'rep',   key:'knee',  need:4, wave:3, col:'#C5F0ED', yb:0.02, win:[.46,1.14], pts:220 },
+  LUNGE: { label:'SIDE LUNGE',   mode:'rep',   key:'lunge', need:1, wave:3, col:'#FF775F', yb:0.14, win:[.56,1.10], pts:200,
+           sided:true, away:false, sideState:'lungeSide' },
+  HOPS:  { label:'SKATER HOPS',  mode:'rep',   key:'hop',   need:2, wave:4, col:'#18A694', yb:0.02, win:[.50,1.12], pts:240 },
+  COMBO: { label:'COMBO',        mode:'combo', wave:4, col:'#FFFFFF', yb:0.26, win:[.46,1.16], pts:300 },
+};
+const SIDE_WORD = { L:'LEFT', R:'RIGHT' };
+// arrow the player should follow, in mirrored screen terms
+const arrowFor = (def, side) => (def.away ? (side === 'L' ? '→' : '←')
+                                          : (side === 'L' ? '←' : '→'));
+const OB_KEYS = Object.keys(OB);
+
+const REP_LABEL = { squat:'Squats', jack:'Jacks', knee:'High knees', lunge:'Lunges',
+                    hop:'Skater hops', punch:'Punches', reach:'Reaches', dodge:'Dodges' };
+// compact forms for the in-game scoreboard strip
+const REP_ABBR  = { squat:'SQT', jack:'JAK', knee:'KNE', lunge:'LUN',
+                    hop:'HOP', punch:'PCH', reach:'RCH', dodge:'DGE' };
+// Rough MET values, used only for the clearly-labelled calorie estimate.
+const MET = { squat:5.0, jack:8.0, knee:8.0, lunge:5.0, hop:8.0, punch:7.8, reach:3.5, dodge:6.0 };
+
+/* ====================== move guide on start ====================== */
+const GUIDE = [
+  ['ICE',   '→','PUNCH',        'Drive a glove through the block. A resting hand will not score.'],
+  ['LOWBAR','↓','SQUAT',        'Drop your hips - chest up, do not bend over.'],
+  ['GATE',  '↕','JUMPING JACK', 'Arms above your shoulders and feet wide, then back together.'],
+  ['WALL',  '⇄','DODGE',        'Side-step away from the marked side.'],
+  ['STAR',  '↑','REACH UP',     'Both hands above your head.'],
+  ['KNEES', '⤒','HIGH KNEES',   'Drive knees up, alternating. One leg alone will not count.'],
+  ['LUNGE', '↙','SIDE LUNGE',   'Wide step to the marked side and sink over that leg.'],
+  ['HOPS',  '⤨','SKATER HOPS',  'Hop side to side, landing on alternate feet.'],
+  ['COMBO', '◈','BOXING COMBO', 'Land the shown punches in order (your own left / right).'],
+];
+document.getElementById('moveGuide').innerHTML = GUIDE.map(([k,g,t,d]) =>
+  `<div class="move"><span class="gl">${g}</span><div><div class="mt">${t}</div>
+   <div class="md">${d}</div></div><span class="pip" style="--c:${OB[k].col}"></span></div>`).join('');
+
+/* ============================= sound =============================
+   Synthesised with WebAudio - no audio files, so the page stays one
+   self-contained document. The context can only be created from a user
+   gesture, so it is unlocked on the Enable Camera click.             */
+const SFX = (() => {
+  let ac = null, master = null, on = true;
+  try { on = localStorage.getItem('mg_sound') !== '0'; } catch(e){}
+
+  function ensure(){
+    if (ac) return ac;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    ac = new AC();
+    master = ac.createGain();
+    master.gain.value = 0.22;
+    master.connect(ac.destination);
+    return ac;
+  }
+  function tone({ freq = 440, to = null, dur = .12, type = 'square', gain = .5, delay = 0 }){
+    if (!on || !ensure()) return;
+    const t = ac.currentTime + delay;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (to) o.frequency.exponentialRampToValueAtTime(Math.max(1, to), t + dur);
+    g.gain.setValueAtTime(.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + .006);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t + dur + .02);
+  }
+  // filtered noise burst - the "impact" half of a hit
+  function burst({ dur = .09, gain = .45, freq = 1700, delay = 0 }){
+    if (!on || !ensure()) return;
+    const t = ac.currentTime + delay;
+    const n = Math.max(1, Math.floor(ac.sampleRate * dur));
+    const buf = ac.createBuffer(1, n, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random()*2 - 1) * (1 - i/n) ** 2;
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.value = freq; bp.Q.value = 1.0;
+    const g = ac.createGain(); g.gain.value = gain;
+    src.connect(bp); bp.connect(g); g.connect(master);
+    src.start(t);
+  }
+
+  return {
+    get on(){ return on; },
+    unlock(){ const c = ensure(); if (c && c.state === 'suspended') c.resume(); },
+    set(v){
+      on = v;
+      try { localStorage.setItem('mg_sound', v ? '1' : '0'); } catch(e){}
+      if (v){ this.unlock(); tone({ freq:880, dur:.07, gain:.35, type:'triangle' }); }
+    },
+    // pitch climbs with the combo so a streak audibly builds
+    hit(combo = 1){
+      const f = 430 * Math.pow(1.11, Math.min(combo, 8) - 1);
+      burst({ dur:.07, gain:.5, freq: 2200 });
+      tone({ freq:f, to:f*2.1, dur:.10, type:'square',   gain:.45 });
+      tone({ freq:f*1.5, to:f*3, dur:.09, type:'triangle', gain:.22, delay:.02 });
+    },
+    miss(){
+      tone({ freq:210, to:70, dur:.26, type:'sawtooth', gain:.32 });
+      burst({ dur:.14, gain:.16, freq:420 });
+    },
+    // soft tick the moment an obstacle becomes actionable: a timing cue
+    arm(){ tone({ freq:1040, dur:.035, type:'triangle', gain:.16 }); },
+    tick(){ tone({ freq:620, dur:.05, type:'square', gain:.3 }); },
+    go(){ [660, 990, 1320].forEach((f, i) =>
+            tone({ freq:f, dur:.13, type:'square', gain:.4, delay:i*.085 })); },
+    wave(){ [523, 659, 784, 1046].forEach((f, i) =>
+            tone({ freq:f, dur:.16, type:'square', gain:.33, delay:i*.075 })); },
+    end(){ [784, 587, 392].forEach((f, i) =>
+            tone({ freq:f, dur:.42, type:'triangle', gain:.4, delay:i*.16 })); },
+  };
+})();
+
+/* =========================== plumbing =========================== */
+const canvas = document.getElementById('stage');
+const ctx    = canvas.getContext('2d', { alpha:false });
+const video  = document.getElementById('cam');
+const $ = id => document.getElementById(id);
+// read once: getComputedStyle per obstacle per frame is a layout thrash
+const FONT = getComputedStyle(document.body).fontFamily;
+
+let CW = 0, CH = 0, DPR = 1;
+function resize(){
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  // the stage is an inset panel now, not the whole window
+  const r = canvas.getBoundingClientRect();
+  CW = Math.max(1, Math.round(r.width)); CH = Math.max(1, Math.round(r.height));
+  canvas.width = Math.round(CW * DPR); canvas.height = Math.round(CH * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // all game maths in CSS pixels
+}
+window.addEventListener('resize', resize);
+// the stage has zero size while #app is hidden, so re-measure when it appears
+new ResizeObserver(resize).observe(canvas);
+resize();
+
+/* ---- cover-fit + mirrored video transform: the ONE shared mapping ---- */
+const VT = { scale:1, offX:0, offY:0, vw:0, vh:0, aspect:16/9 };
+function updateVideoTransform(){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return false;
+  VT.vw = vw; VT.vh = vh; VT.aspect = vw / vh;
+  VT.scale = Math.max(CW / vw, CH / vh);
+  VT.offX = (CW - vw * VT.scale) / 2;
+  VT.offY = (CH - vh * VT.scale) / 2;
+  return true;
+}
+// normalized landmark -> canvas CSS px (mirrored for a selfie view)
+const toX = nx => VT.offX + (1 - nx) * VT.vw * VT.scale;
+const toY = ny => VT.offY + ny * VT.vh * VT.scale;
+
+/* =============== small maths helpers (aspect-corrected) ===============
+   Landmark x spans the frame width and y the frame height, so raw
+   normalized distances are stretched. Multiplying x by the aspect ratio
+   puts everything in consistent "frame-height" units.               */
+const mid  = (a,b) => ({ x:(a.x+b.x)/2, y:(a.y+b.y)/2 });
+const dist = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+const clamp = (v,a,b) => v < a ? a : v > b ? b : v;
+const lerp  = (a,b,t) => a + (b-a)*t;
+function median(arr){
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a,b)=>a-b); const h = s.length>>1;
+  return s.length % 2 ? s[h] : (s[h-1]+s[h])/2;
+}
+
+const LM = { nose:0, shL:11, shR:12, elL:13, elR:14, wrL:15, wrR:16,
+             hipL:23, hipR:24, kneeL:25, kneeR:26, ankL:27, ankR:28 };
+
+function metricsOf(lm){
+  const a = VT.aspect;
+  const P = i => ({ x: lm[i].x * a, y: lm[i].y, v: lm[i].visibility ?? 1 });
+  const m = {};
+  for (const k in LM) m[k] = P(LM[k]);
+  m.sh   = mid(m.shL, m.shR);
+  m.hip  = mid(m.hipL, m.hipR);
+  m.knee = mid(m.kneeL, m.kneeR);
+  m.ank  = mid(m.ankL, m.ankR);
+  m.wr   = mid(m.wrL, m.wrR);
+  m.torso = Math.max(1e-4, dist(m.sh, m.hip));
+  m.ankleSpread = Math.abs(m.ankL.x - m.ankR.x);
+  m.armL = dist(m.shL, m.elL) + dist(m.elL, m.wrL);
+  m.armR = dist(m.shR, m.elR) + dist(m.elR, m.wrR);
+  // Some builds report visibility as 0 for every landmark; treat that as
+  // "unknown" and fall back to the geometric check rather than locking out.
+  const visKnown = m.ankL.v > 0 || m.ankR.v > 0;
+  const visOK = !visKnown || m.ankL.v > T.framing.ankleVis || m.ankR.v > T.framing.ankleVis;
+  m.framed = visOK && m.ank.y < T.framing.ankleY;
+  return m;
+}
+
+/* ======================= rep primitives =======================
+   One hysteresis counter shared by every two-phase exercise, and one
+   alternation counter for the left/right moves. Double-counting is
+   killed here, once, instead of in nine places.                    */
+class RepCounter{
+  constructor(enter, exit, refract = T.refract){
+    this.enter = enter; this.exit = exit; this.refract = refract;
+    this.down = false; this.last = -1e9; this.count = 0;
+  }
+  update(v, now){
+    if (!this.down){ if (v >= this.enter) this.down = true; return false; }
+    if (v <= this.exit){
+      this.down = false;
+      if (now - this.last >= this.refract){ this.last = now; this.count++; return true; }
+    }
+    return false;
+  }
+  reset(){ this.down = false; this.last = -1e9; this.count = 0; }
+}
+class AltCounter{
+  constructor(refract = T.refract){ this.refract = refract; this.side = null; this.last = -1e9; this.count = 0; }
+  update(side, now){                       // side: 'L' | 'R' | null
+    if (!side || side === this.side) return false;
+    if (now - this.last < this.refract){ return false; }
+    this.side = side; this.last = now; this.count++; return true;
+  }
+  reset(){ this.side = null; this.last = -1e9; this.count = 0; }
+}
+
+/* =========================== player =========================== */
+class Player{
+  constructor(i){
+    this.i = i; this.col = COL[i];
+    this.reset(true);
+  }
+  reset(hard){
+    this.score = 0; this.combo = 1; this.bestCombo = 1;
+    this.hits = 0; this.misses = 0;
+    this.obstacles = [];
+    this.spawnAt = 0;
+    this.flash = 0; this.flashCol = null;
+    this.reps = { squat:0, jack:0, knee:0, lunge:0, hop:0, punch:0, reach:0, dodge:0 };
+    this.rc = {
+      squat: new RepCounter(T.squat.enter, T.squat.exit),
+      jack:  new RepCounter(T.jack.enter,  T.jack.exit),
+      lunge: new RepCounter(T.lunge.drop,  T.lunge.exitDrop),
+      knee:  new AltCounter(200),
+      hop:   new AltCounter(260),
+    };
+    this.state = { dodge:null, reach:false, kneeSide:null, lungeSide:null };
+    this.wrist = [ {x:0,y:0,vx:0,vy:0,t:0,ok:false}, {x:0,y:0,vx:0,vy:0,t:0,ok:false} ];
+    this.punchLog = [];                    // recent {label, t} for combos
+    if (hard){ this.cal = null; }
+    this.m = null; this.lost = 0; this.seen = false; this.lastCx = null;
+    this.warn = '';
+  }
+  get live(){ return this.seen && this.cal && this.lost < 12; }
+}
+const players = [new Player(0), new Player(1)];
+
+/* ======================= pose -> players =======================
+   numPoses:2 returns poses in an unstable order. Without sticky
+   matching, scores cross-attribute the moment players move.      */
+function hipCanvasX(lm){ return toX((lm[LM.hipL].x + lm[LM.hipR].x) / 2); }
+
+function assignPoses(poses){
+  for (const p of players) p.seen = false;
+  const cands = poses.map(lm => ({ lm, cx: hipCanvasX(lm) }));
+  const give = (p, c) => { p.seen = true; p.lost = 0; p.lastCx = c.cx; p.lm = c.lm; };
+
+  if (cands.length === 0){ for (const p of players) p.lost++; return; }
+
+  if (cands.length === 1){
+    const c = cands[0];
+    const d0 = players[0].lastCx == null ? Infinity : Math.abs(c.cx - players[0].lastCx);
+    const d1 = players[1].lastCx == null ? Infinity : Math.abs(c.cx - players[1].lastCx);
+    let idx;
+    if (d0 === Infinity && d1 === Infinity) idx = c.cx < CW/2 ? 0 : 1;   // cold start: by half
+    else idx = d0 <= d1 ? 0 : 1;                                        // else: stay with owner
+    give(players[idx], c);
+    players[1-idx].lost++;
+    return;
+  }
+
+  // two poses: compare both pairings, keep the cheaper one
+  const [a, b] = cands;
+  const h0 = players[0].lastCx, h1 = players[1].lastCx;
+  let straight;
+  // Two bodies standing on top of each other cannot be told apart by position,
+  // and nearest-centroid matching goes chaotic there. Fall back to the rule the
+  // game is actually built on - left half is P1 - so the behaviour stays
+  // predictable instead of flickering.
+  if (h0 == null || h1 == null || Math.abs(a.cx - b.cx) < CW * 0.12){
+    straight = a.cx <= b.cx;
+  } else {
+    const costA = Math.abs(a.cx-h0) + Math.abs(b.cx-h1);
+    const costB = Math.abs(b.cx-h0) + Math.abs(a.cx-h1);
+    straight = costA <= costB;
+  }
+  give(players[0], straight ? a : b);
+  give(players[1], straight ? b : a);
+}
+
+/* ====================== adaptive baselines ======================
+   A fixed baseline breaks the moment someone drifts a step closer.
+   These references only drift while the player looks neutral, so a
+   squat never pollutes the standing reference it is measured against. */
+function adaptCal(p, m){
+  const c = p.cal, k = 0.02;
+  const hipDrop = (m.hip.y - c.hipY) / c.torso;
+  const upright = m.torso / c.torso;
+  const neutral = hipDrop < 0.15 && hipDrop > -0.15 && upright > 0.85;
+  if (neutral){
+    c.hipY  = lerp(c.hipY,  m.hip.y,  k);
+    c.shY   = lerp(c.shY,   m.sh.y,   k);
+    c.kneeY = lerp(c.kneeY, m.knee.y, k);
+    c.noseY = lerp(c.noseY, m.nose.y, k);
+    c.torso = lerp(c.torso, m.torso,  k);
+    c.armL  = Math.max(c.armL, m.armL); c.armR = Math.max(c.armR, m.armR);
+    const spreadGain = (m.ankleSpread - c.ankSpread) / c.torso;
+    if (Math.abs(spreadGain) < 0.2) c.ankSpread = lerp(c.ankSpread, m.ankleSpread, k);
+    if (Math.abs((m.hip.x - c.centerX) / c.torso) < 0.2) c.centerX = lerp(c.centerX, m.hip.x, k);
+  }
+}
+
+/* ========================== detectors ========================== */
+function runDetectors(p, m, now, dt){
+  const c = p.cal, tl = c.torso;
+
+  /* --- squat: hip drop, gated on an upright torso so a forward
+         hinge (bending over) cannot be mistaken for a squat. From a
+         front camera a knee angle is mostly depth and unusable. --- */
+  const hipDrop = (m.hip.y - c.hipY) / tl;
+  const upright = m.torso / c.torso;
+  const squatVal = upright > T.squat.upright ? hipDrop : 0;
+  if (p.rc.squat.update(squatVal, now)) p.reps.squat++;
+
+  /* --- jumping jack: arms above shoulders AND feet wide --- */
+  const armsUp  = (c.shY - m.wr.y) / tl > T.jack.armsUp;
+  const spread  = (m.ankleSpread - c.ankSpread) / tl;
+  const jackVal = (armsUp && spread > 0.25) ? Math.min(spread, 1) : 0;
+  if (p.rc.jack.update(jackVal, now)) p.reps.jack++;
+
+  /* --- high knees: alternation required, so one leg cannot spam --- */
+  const riseL = (c.kneeY - m.kneeL.y) / tl, riseR = (c.kneeY - m.kneeR.y) / tl;
+  let kneeSide = null;
+  if (riseL > T.knee.enter && riseL > riseR) kneeSide = 'L';
+  else if (riseR > T.knee.enter && riseR > riseL) kneeSide = 'R';
+  p.state.kneeSide = kneeSide;
+  if (p.rc.knee.update(kneeSide, now)) p.reps.knee++;
+
+  /* --- overhead reach (a held state, not a rep) --- */
+  const reach = (c.noseY - m.wrL.y) / tl > T.reach.above && (c.noseY - m.wrR.y) / tl > T.reach.above;
+  if (reach && !p.state.reach) p.reps.reach++;
+  p.state.reach = reach;
+
+  /* --- lateral dodge (held state) --- */
+  const shift = (m.hip.x - c.centerX) / tl;
+  // canvas is mirrored, so a positive landmark-x shift appears on screen-left
+  const screenShift = -shift;
+  let dodge = p.state.dodge;
+  if (Math.abs(screenShift) > T.dodge.enter) dodge = screenShift < 0 ? 'L' : 'R';
+  else if (Math.abs(screenShift) < T.dodge.exit) dodge = null;
+  if (dodge && dodge !== p.state.dodge) p.reps.dodge++;
+  p.state.dodge = dodge;
+
+  /* --- lateral lunge: wide stance + hip drop + weight to one side --- */
+  const wide = spread > T.lunge.spread;
+  const lungeVal = (wide && Math.abs(screenShift) > T.lunge.shift) ? hipDrop : 0;
+  if (lungeVal > 0) p.state.lungeSide = screenShift < 0 ? 'L' : 'R';
+  if (p.rc.lunge.update(lungeVal, now)) p.reps.lunge++;
+
+  /* --- skater hops: side-to-side crossing with the trailing foot up.
+         Airborne frames are too noisy to trust, so the single-leg
+         stance is the signal instead. --- */
+  const legLift = Math.abs(m.ankL.y - m.ankR.y) / tl;
+  let hopSide = null;
+  if (legLift > T.hop.lift && Math.abs(screenShift) > T.hop.cross)
+    hopSide = screenShift < 0 ? 'L' : 'R';
+  if (p.rc.hop.update(hopSide, now)) p.reps.hop++;
+
+  /* --- punches: wrist velocity in canvas px/s, plus classification.
+         True jab-vs-cross is a depth call a single camera cannot make,
+         so punches are labelled by arm and path: L/R STRAIGHT or HOOK. */
+  const tlPx = tl * VT.vh * VT.scale;              // torso length in canvas px
+  const wrists = [[LM.wrL, 0, 'L', m.armL, c.armL], [LM.wrR, 1, 'R', m.armR, c.armR]];
+  for (const [li, slot, side, armNow, armMax] of wrists){
+    const w = p.wrist[slot];
+    const x = toX(p.lm[li].x), y = toY(p.lm[li].y);
+    if (w.ok && dt > 0){
+      const nvx = (x - w.x) / dt, nvy = (y - w.y) / dt;
+      w.vx = lerp(w.vx, nvx, 0.55); w.vy = lerp(w.vy, nvy, 0.55);   // light EMA
+    }
+    w.x = x; w.y = y; w.ok = true;
+    w.speed = Math.hypot(w.vx, w.vy) / Math.max(1, tlPx);           // torso-lengths/s
+    const ext = armNow / Math.max(1e-4, armMax);
+    const lateral = Math.abs(w.vx) > 1.6 * Math.abs(w.vy);
+    // Speed alone is not a punch. Three things also have to be true, each
+    // ruling out a different false positive measured in the self-test:
+    //   extending  - a fast squat translates the whole body, hands included
+    //   reaching   - the hand is out from the torso, not just travelling
+    //   notOverhead- a jumping jack straightens the arms too, overhead
+    const sh = slot === 0 ? m.shL : m.shR;
+    const wr = slot === 0 ? m.wrL : m.wrR;
+    const extending   = ext > T.punch.extend && ext > (w.lastExt ?? 0) + 0.004;
+    const reaching    = Math.abs(wr.x - sh.x) > T.punch.outward * tl;
+    const notOverhead = (wr.y - sh.y) > -T.punch.overhead * tl;
+    w.lastExt = ext;
+    if (w.speed > T.punch.speed && extending && reaching && notOverhead && !w.armed){
+      w.armed = true;
+      // Combos are matched on ARM ONLY. The straight/hook flavour is shown
+      // but never required, because that call needs depth a single camera
+      // does not have - requiring it would fail honest punches.
+      const shape = (ext > T.combo.straight || !lateral) ? 'STRAIGHT' : 'HOOK';
+      p.punchLog.push({ side, shape, t:now, consumed:false });
+      if (p.punchLog.length > 10) p.punchLog.shift();
+      p.reps.punch++;
+      p.lastPunch = { side, shape, t:now };
+    } else if (w.speed < T.punch.speed * 0.5){ w.armed = false; }
+    w.side = side;
+  }
+}
+
+/* ==================== obstacle geometry/render ==================== */
+const HORIZON = () => CH * 0.40;
+const GROUND  = () => CH * 0.94;
+const zEase   = z => Math.pow(clamp(z,0,1.3), 1.7);
+
+function laneRect(i){ return i === 0 ? { x0:0, x1:CW/2 } : { x0:CW/2, x1:CW }; }
+
+function obPlacement(o, i){
+  const r = laneRect(i), cx = (r.x0 + r.x1) / 2, laneW = r.x1 - r.x0;
+  const e = zEase(o.z);
+  // the scale is capped: an obstacle grown wider than its own lane spills
+  // across the midline into the other player's half
+  const sc = 0.16 + 0.84 * Math.min(e, 1.18);
+  const y  = lerp(HORIZON(), GROUND(), e);
+  const def = OB[o.type];
+  const offX = (o.side === 'L' ? -0.18 : o.side === 'R' ? 0.18 : 0) * laneW * sc;
+  const x = clamp(cx + offX, r.x0 + laneW*0.12, r.x1 - laneW*0.12);
+  return { x, y: y - def.yb * CH * sc, sc, laneW, cx, x0:r.x0, x1:r.x1 };
+}
+
+function spawn(p, now, wave){
+  const pool = OB_KEYS.filter(k => OB[k].wave <= wave);
+  const type = pool[(Math.random() * pool.length) | 0];
+  const def  = OB[type];
+  const o = {
+    type, z:0, speed: 0.17 + 0.035 * (wave - 1) + Math.random() * 0.07,
+    side: def.sided ? (Math.random() < 0.5 ? 'L' : 'R') : null,
+    armed:false, snapshot:0, done:false, result:null, shake:0,
+  };
+  if (def.mode === 'combo'){
+    // alternating-ish sequence of arms, 2-3 punches
+    const n = Math.random() < 0.5 ? 2 : 3;
+    o.combo = []; let s = Math.random() < 0.5 ? 'L' : 'R';
+    for (let i = 0; i < n; i++){ o.combo.push(s); if (Math.random() < 0.75) s = s === 'L' ? 'R' : 'L'; }
+    o.comboIdx = 0;
+  }
+  p.obstacles.push(o);
+}
+
+/* ------- resolution: reuse the rep counters as the source of truth ------- */
+function resolve(p, o, now){
+  const def = OB[o.type];
+  if (def.mode === 'rep'){
+    if (p.reps[def.key] - o.snapshot < def.need) return false;
+    // a sided rep (side lunge) must be to the marked side, not either way
+    if (def.sideState) return p.state[def.sideState] === o.side;
+    return true;
+  }
+  if (def.mode === 'state'){
+    if (def.key === 'reach') return p.state.reach;
+    if (def.key === 'dodge') return p.state.dodge && p.state.dodge !== o.side; // step AWAY
+    return false;
+  }
+  if (def.mode === 'hit'){
+    const place = obPlacement(o, p.i);
+    const half  = 0.17 * place.laneW * place.sc;              // block half-size
+    const tlPx  = p.cal.torso * VT.vh * VT.scale;
+    const gh    = T.punch.box * tlPx;                          // glove half-size
+    for (const w of p.wrist){
+      // `armed` is the same full punch gate the rep counter uses (speed +
+      // extension + reach + not overhead), so a fast hand dropping into a
+      // squat cannot break a block just by passing through it
+      if (!w.ok || !w.armed) continue;
+      if (Math.abs(w.x - place.x) <= half + gh &&
+          Math.abs(w.y - place.y) <= half + gh) return true;   // axis-aligned box test
+    }
+    return false;
+  }
+  if (def.mode === 'combo'){
+    for (const q of p.punchLog){
+      if (q.consumed || q.t < o.armedAt) continue;
+      if (q.side === o.combo[o.comboIdx]){
+        q.consumed = true;
+        if (++o.comboIdx >= o.combo.length) return true;
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
+function award(p, o, ok, now){
+  const def = OB[o.type];
+  o.done = true; o.result = ok ? 'hit' : 'miss'; o.fade = 1;
+  if (ok){
+    p.hits++;
+    p.score += Math.round(def.pts * p.combo);
+    p.combo = Math.min(8, p.combo + 1);
+    p.bestCombo = Math.max(p.bestCombo, p.combo);
+    const pl = obPlacement(o, p.i);
+    shatter(pl.x, pl.y, def.col, 0.17 * pl.laneW * pl.sc);
+    p.flash = 0.22; p.flashCol = p.col.main;
+    SFX.hit(p.combo);
+  } else {
+    p.misses++; p.combo = 1;
+    p.flash = 0.3; p.flashCol = '#FF775F'; o.shake = 1;
+    SFX.miss();
+  }
+}
+
+/* ========================== particles ========================== */
+const parts = [];
+function shatter(x, y, col, r){
+  const n = Math.min(26, 14 + (r / 8) | 0);
+  for (let i = 0; i < n && parts.length < 320; i++){
+    const a = Math.random() * Math.PI * 2, s = 90 + Math.random() * 420;
+    parts.push({ x, y, vx:Math.cos(a)*s, vy:Math.sin(a)*s - 110,
+                 life:1, size:3 + Math.random()*r*0.30,
+                 rot:Math.random()*6.28, vr:(Math.random()-.5)*9, col });
+  }
+}
+function updateParts(dt){
+  for (let i = parts.length - 1; i >= 0; i--){
+    const q = parts[i];
+    q.vy += 1500 * dt; q.x += q.vx*dt; q.y += q.vy*dt;
+    q.rot += q.vr*dt; q.life -= dt * 1.5;
+    if (q.life <= 0) parts.splice(i, 1);
+  }
+}
+
+/* ======================== game state ======================== */
+const GS = { START:0, CALIB:1, PLAY:2, SUMMARY:3, PAUSE:4 };
+let phase = GS.START;
+let landmarker = null, stream = null;
+let lastVideoTime = -1, lastT = performance.now(), lastDetT = performance.now();
+let tPlay = 0, wave = 1, showSkel = true;   // the tracking armature is part of the look
+let fpsEMA = 0;
+let calStart = 0, calSamples = [[], []], lastTick = -1;
+
+function setScreen(id){
+  for (const s of document.querySelectorAll('.screen')) s.classList.remove('on');
+  if (id) $(id).classList.add('on');
+  // calibration keeps the stage visible - you cannot fix your framing
+  // behind a full-page cover
+  const inGame = phase === GS.CALIB || phase === GS.PLAY || phase === GS.PAUSE;
+  $('app').classList.toggle('on', inGame);
+  $('calibOverlay').classList.toggle('on', phase === GS.CALIB);
+  if (inGame) resize();
+}
+
+/* ------------------------- boot ------------------------- */
+if (location.protocol === 'file:'){
+  $('startNote').className = 'note bad';
+  $('startNote').innerHTML =
+    '<b>This page is open as <code>file://</code> and the camera cannot start.</b> ' +
+    'Browsers only allow <code>getUserMedia</code> in a secure context. Serve the folder and reload:' +
+    '<br><br><code>python3 -m http.server 8777 --directory .</code><br><br>' +
+    'then open <code>http://localhost:8777</code>';
+  $('go').disabled = true;
+}
+
+$('go').addEventListener('click', boot);
+$('again').addEventListener('click', () => { startSession(false); });
+$('recal').addEventListener('click', () => { startSession(true); });
+
+async function boot(){
+  const btn = $('go'); btn.disabled = true;
+  const msg = $('loadMsg');
+  SFX.unlock();        // audio contexts may only start from a user gesture
+  try{
+    msg.textContent = 'Requesting camera…';
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{ width:{ideal:1280}, height:{ideal:720}, facingMode:'user' }, audio:false });
+    video.srcObject = stream;
+    await video.play();
+
+    msg.textContent = 'Loading pose model (~5.8 MB, first run only)…';
+    const fileset = await FilesetResolver.forVisionTasks(WASM);
+    const opts = {
+      baseOptions:{ modelAssetPath: MODEL, delegate:'GPU' },
+      runningMode:'VIDEO', numPoses:2,
+      minPoseDetectionConfidence:0.5, minPosePresenceConfidence:0.5, minTrackingConfidence:0.5,
+    };
+    try{
+      landmarker = await PoseLandmarker.createFromOptions(fileset, opts);
+    }catch(e){
+      console.warn('GPU delegate failed, falling back to CPU:', e);
+      msg.textContent = 'GPU unavailable — loading on CPU…';
+      opts.baseOptions.delegate = 'CPU';
+      landmarker = await PoseLandmarker.createFromOptions(fileset, opts);
+    }
+
+    await Promise.all(GLOVES.map(img => img.decode?.().catch(()=>{}) ?? Promise.resolve()));
+    msg.textContent = '';
+    startSession(true);
+    startLoop();
+  }catch(err){
+    console.error(err);
+    btn.disabled = false;
+    const denied = err && /NotAllowed|Permission/i.test(err.name + err.message);
+    const none   = err && /NotFound|DevicesNotFound|Overconstrained/i.test(err.name + err.message);
+    $('startNote').className = 'note bad';
+    $('startNote').innerHTML = denied
+      ? '<b>Camera permission was denied.</b> This game cannot run without it. Allow camera access for this site in your browser’s address-bar icon, then press start again.'
+      : none
+      ? '<b>No camera found.</b> Connect a webcam and press start again.'
+      : '<b>Could not start.</b> ' + (err.message || err) +
+        '<br>Check your connection — the pose model and runtime load from a CDN on first run.';
+    msg.textContent = '';
+  }
+}
+
+function startSession(recalibrate){
+  for (const p of players) p.reset(recalibrate);
+  parts.length = 0;
+  tPlay = 0; wave = 1;
+  if (recalibrate || !players.some(p => p.cal)){
+    calSamples = [[], []]; calStart = performance.now();
+    phase = GS.CALIB; setScreen(null);
+  } else {
+    beginPlay(performance.now());
+  }
+}
+
+/* ========================= main loop ========================= */
+let loopStarted = false;
+function startLoop(){
+  if (loopStarted) return;
+  loopStarted = true; lastT = performance.now(); requestAnimationFrame(frame);
+}
+
+function frame(now){
+  requestAnimationFrame(frame);
+  let dt = (now - lastT) / 1000; lastT = now;
+  dt = clamp(dt, 0, 0.05);                       // a stall must not teleport obstacles
+  fpsEMA = fpsEMA ? lerp(fpsEMA, 1 / Math.max(dt, 1e-3), 0.06) : 1 / Math.max(dt, 1e-3);
+
+  // detect once per NEW video frame, not once per animation frame
+  if (landmarker && video.readyState >= 2 && updateVideoTransform()
+      && video.currentTime !== lastVideoTime){
+    lastVideoTime = video.currentTime;
+    let res = null;
+    try{ res = landmarker.detectForVideo(video, now); }
+    catch(e){ console.warn('detect failed', e); }
+    if (res){
+      // wrist velocity must use the gap between DETECTIONS, not between
+      // animation frames - a 30fps camera under a 60fps loop would
+      // otherwise read every punch as twice its real speed
+      const ddt = clamp((now - lastDetT) / 1000, 1/120, 0.2);
+      lastDetT = now;
+      ingest(res, now, ddt);
+    }
+  }
+
+  if (phase === GS.CALIB)      stepCalib(now);
+  else if (phase === GS.PLAY)  stepPlay(now, dt);
+
+  updateParts(dt);
+  render(now);
+  if (phase === GS.PLAY || phase === GS.PAUSE) paintHUD();
+}
+
+function ingest(res, now, dt){
+  const poses = (res.landmarks || []).filter(l => l && l.length >= 33);
+  assignPoses(poses);
+  for (const p of players){
+    if (!p.seen){ p.warn = ''; continue; }
+    const m = metricsOf(p.lm);
+    p.m = m;
+    p.warn = m.framed ? '' : 'step back — show your whole body, head to ankles';
+    if (phase === GS.CALIB){
+      calSamples[p.i].push(m);          // framing is reported, not enforced,
+      continue;                         // so calibration can never deadlock
+    }
+    if (!p.cal) continue;
+    adaptCal(p, m);
+    if (m.framed) runDetectors(p, m, now, dt);
+  }
+}
+
+const MIN_SAMPLES = 15;
+function stepCalib(now){
+  const left = 3 - (now - calStart) / 1000;
+  const anySeen = players.some(p => p.seen);
+  const n = Math.max(0, Math.ceil(left));
+  if (anySeen && n !== lastTick){ lastTick = n; if (n > 0) SFX.tick(); }
+  if (!anySeen) lastTick = -1;
+  $('calNum').textContent = anySeen ? n : '—';
+  for (let i = 0; i < 2; i++){
+    const slot = $('slot' + (i+1)), p = players[i];
+    const s = calSamples[i], n = s.length;
+    const framedN = s.reduce((a, m) => a + (m.framed ? 1 : 0), 0);
+    const ready = n >= MIN_SAMPLES;
+    slot.classList.toggle('ready', ready && framedN >= MIN_SAMPLES);
+    slot.querySelector('.sv').textContent =
+      !p.seen        ? 'not detected — stand in this half'
+      : p.m && !p.m.framed ? 'step back — ankles not visible'
+      : ready        ? `measured (${framedN} clean samples)`
+      :                `holding still… (${n})`;
+  }
+  // the countdown only runs while somebody is actually visible
+  if (!anySeen){ calStart = now; return; }
+  if (left > 0) return;
+
+  let any = false;
+  for (let i = 0; i < 2; i++){
+    const s = calSamples[i];
+    // prefer fully-framed samples; fall back to whatever we have so a badly
+    // framed player still gets to play (with the framing warning showing)
+    const framed = s.filter(m => m.framed);
+    const use = framed.length >= MIN_SAMPLES ? framed : s;
+    if (use.length < MIN_SAMPLES) continue;
+    const pick = f => median(use.map(f));
+    players[i].cal = {
+      torso:     pick(m => m.torso),
+      hipY:      pick(m => m.hip.y),
+      shY:       pick(m => m.sh.y),
+      kneeY:     pick(m => m.knee.y),
+      noseY:     pick(m => m.nose.y),
+      ankSpread: pick(m => m.ankleSpread),
+      centerX:   pick(m => m.hip.x),
+      armL:      pick(m => m.armL),
+      armR:      pick(m => m.armR),
+    };
+    any = true;
+  }
+  // never leave calibration without at least one measured player, or the
+  // session would run for five minutes with nothing happening
+  if (!any){ calStart = now; calSamples = [[], []]; return; }
+  beginPlay(now);
+}
+
+function beginPlay(now){
+  phase = GS.PLAY; setScreen(null); SFX.go();
+  for (const p of players) p.spawnAt = now + 1100 + Math.random() * 600;
+}
+
+function stepPlay(now, dt){
+  tPlay += dt;
+  const w = Math.min(6, 1 + Math.floor(tPlay / T.waveSecs));
+  if (w !== wave){ wave = w; SFX.wave(); }
+  if (tPlay >= T.sessionSecs){ endSession(); return; }
+
+  for (const p of players){
+    p.flash = Math.max(0, p.flash - dt * 3);
+    if (!p.cal) continue;
+
+    // spawning pauses while a player is out of frame, so they are not
+    // charged misses for obstacles they never had a chance to see
+    const interval = Math.max(950, 2300 - 190 * (wave - 1));
+    if (p.live && now >= p.spawnAt){
+      spawn(p, now, wave);
+      p.spawnAt = now + interval * (0.78 + Math.random() * 0.5);
+    }
+
+    for (let i = p.obstacles.length - 1; i >= 0; i--){
+      const o = p.obstacles[i], def = OB[o.type];
+      o.z += o.speed * dt;
+      if (o.shake > 0) o.shake = Math.max(0, o.shake - dt * 4);
+
+      if (!o.done){
+        if (!o.armed && o.z >= def.win[0]){
+          o.armed = true; o.armedAt = now;
+          if (def.mode === 'rep') o.snapshot = p.reps[def.key];
+          SFX.arm();                                  // "act now" timing cue
+        }
+        if (o.armed && resolve(p, o, now)) award(p, o, true, now);
+        else if (o.z > def.win[1]) award(p, o, false, now);
+      } else {
+        o.fade -= dt * 3.2;                        // cleared blocks leave at once
+      }
+      if (o.z > 1.4 || o.fade <= 0) p.obstacles.splice(i, 1);
+    }
+  }
+}
+
+function endSession(){
+  phase = GS.SUMMARY; SFX.end();
+  paintSummary();
+  setScreen('screen-summary');
+}
+
+/* =========================== render =========================== */
+function render(now){
+  ctx.fillStyle = PANEL;
+  ctx.fillRect(0, 0, CW, CH);
+
+  // mirrored, cover-fit camera feed, pushed back so the flat graphics read
+  if (video.readyState >= 2 && VT.vw){
+    ctx.save();
+    ctx.globalAlpha = 0.66;
+    ctx.translate(CW, 0); ctx.scale(-1, 1);
+    ctx.drawImage(video, CW - VT.offX - VT.vw*VT.scale, VT.offY, VT.vw*VT.scale, VT.vh*VT.scale);
+    ctx.restore();
+    ctx.fillStyle = 'rgba(37,43,39,.44)';
+    ctx.fillRect(0, 0, CW, CH);
+  }
+
+  if (phase === GS.START || phase === GS.SUMMARY) return;
+
+  drawGround();
+  for (const p of players){
+    if (!p.cal) continue;
+    const r = laneRect(p.i);
+    ctx.save();                       // hard guarantee: a lane's obstacles and
+    ctx.beginPath();                  // labels can never spill into the other
+    ctx.rect(r.x0, 0, r.x1 - r.x0, CH);
+    ctx.clip();
+    const sorted = [...p.obstacles].sort((a, b) => a.z - b.z);   // far first
+    // only the nearest live obstacle gets a label - stacked chips are noise,
+    // and that one is the only thing the player has to act on
+    const front = sorted.filter(o => !o.done).pop();
+    for (const o of sorted) drawObstacle(p, o, o === front);
+    ctx.restore();
+  }
+  drawMidline();
+  for (const p of players){
+    if (!p.live || !p.m) continue;
+    if (showSkel) drawSkeleton(p);
+    drawGloves(p);
+    drawCue(p);
+  }
+  drawParticles();
+  for (const p of players) if (p.flash > 0) drawFlash(p);
+}
+
+function drawGround(){
+  const hy = HORIZON(), gy = GROUND();
+  ctx.save();
+  ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,.10)';
+  for (let i = 0; i <= 10; i++){
+    const e = zEase(i / 10), y = lerp(hy, gy, e);
+    ctx.globalAlpha = 0.25 + 0.75 * (i / 10);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CW, y); ctx.stroke();
+  }
+  ctx.globalAlpha = 1; ctx.strokeStyle = 'rgba(255,255,255,.07)';
+  for (let i = -6; i <= 6; i++){
+    const xT = CW/2 + i * (CW/14), xB = CW/2 + i * (CW/5.2);
+    ctx.beginPath(); ctx.moveTo(xT, hy); ctx.lineTo(xB, gy); ctx.stroke();
+  }
+  // action line: where an obstacle must already be cleared
+  const ay = lerp(hy, gy, zEase(0.88));
+  ctx.strokeStyle = LIME; ctx.globalAlpha = .5;
+  ctx.setLineDash([14, 9]); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, ay); ctx.lineTo(CW, ay); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawMidline(){
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,.26)'; ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 9]);
+  ctx.beginPath(); ctx.moveTo(CW/2, 0); ctx.lineTo(CW/2, CH); ctx.stroke();
+  ctx.restore();
+}
+
+/* ---- flat drawing primitives: solid fill, hard ink keyline, no glow ---- */
+function plate(x, y, w, h, fill, lw){
+  if (fill){ ctx.fillStyle = fill; ctx.fillRect(x, y, w, h); }
+  ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.strokeRect(x, y, w, h);
+}
+// diagonal hazard fill, the reference's signature "breakable" texture
+function hazard(w, h, stripe, back, step){
+  ctx.save();
+  ctx.beginPath(); ctx.rect(-w, -h, w*2, h*2); ctx.clip();
+  ctx.fillStyle = back; ctx.fillRect(-w, -h, w*2, h*2);
+  ctx.strokeStyle = stripe; ctx.lineWidth = step * 0.58; ctx.lineCap = 'butt';
+  for (let x = -w - h*2; x < w + h*2; x += step){
+    ctx.beginPath(); ctx.moveTo(x, -h); ctx.lineTo(x + h*2, h); ctx.stroke();
+  }
+  ctx.restore();
+}
+// a letterspaced label sitting on a solid chip, like the UI chips
+function chipText(txt, x, y, fs, bg, fg){
+  ctx.font = `${fs}px ${DISPLAY}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const w = ctx.measureText(txt).width, px = fs*0.52, py = fs*0.40;
+  plate(x - w/2 - px, y - fs/2 - py, w + px*2, fs + py*2, bg, 2);
+  ctx.fillStyle = fg; ctx.fillText(txt, x, y);
+}
+
+function drawObstacle(p, o, isFront){
+  const def = OB[o.type], pl = obPlacement(o, p.i);
+  const s = pl.laneW * pl.sc;
+  const alpha = clamp(o.z / 0.18, 0, 1) * (o.done ? clamp(o.fade, 0, 1) : 1);
+  if (alpha <= 0.01) return;
+
+  const jitter = o.shake ? (Math.random() - .5) * 10 * o.shake : 0;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(pl.x + jitter, pl.y);
+
+  let col = def.col;
+  if (o.done) col = o.result === 'hit' ? LIME : '#FF775F';
+  const lw = Math.max(2, 3.2 * pl.sc);
+  ctx.lineJoin = 'miter';
+
+  switch (o.type){
+    case 'ICE': {                                   // breakable hazard block
+      const h = s * 0.17;
+      hazard(h, h, col, INK, Math.max(7, s*0.052));
+      plate(-h, -h, h*2, h*2, null, lw);
+      const tw = h*0.40, th = h*1.05;               // white "BREAK" tag
+      plate(-tw/2, -th/2, tw, th, '#fff', lw*0.7);
+      ctx.save(); ctx.rotate(-Math.PI/2);
+      ctx.font = `${clamp(h*0.26, 7, 15)}px ${DISPLAY}`;
+      ctx.fillStyle = INK; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('BREAK', 0, 0);
+      ctx.restore();
+      break;
+    }
+    case 'LOWBAR': {                                // duck under this bar
+      const w = s * 0.38, h = s * 0.05;
+      plate(-w, -h, w*2, h*2, col, lw);
+      ctx.strokeStyle = INK; ctx.lineWidth = lw;
+      ctx.beginPath();
+      for (const sx of [-1, 1]){ ctx.moveTo(sx*w*0.92, h); ctx.lineTo(sx*w*0.92, h + s*0.26); }
+      ctx.stroke();
+      break;
+    }
+    case 'GATE': {                                  // star-jump gate
+      const w = s * 0.33, h = s * 0.26;
+      ctx.strokeStyle = INK; ctx.lineWidth = lw * 2.6; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-w, h); ctx.lineTo(-w*0.55, -h); ctx.lineTo(0, h*0.1);
+      ctx.lineTo(w*0.55, -h); ctx.lineTo(w, h); ctx.stroke();
+      ctx.strokeStyle = col; ctx.lineWidth = lw * 1.2; ctx.stroke();
+      ctx.lineCap = 'butt';
+      break;
+    }
+    case 'WALL': {                                  // slab to step away from
+      const w = s * 0.17, h = s * 0.34;
+      hazard(w, h, col, INK, Math.max(7, s*0.05));
+      plate(-w, -h, w*2, h*2, null, lw);
+      const d = o.side === 'L' ? 1 : -1;            // arrow points the safe way
+      ctx.strokeStyle = LIME; ctx.lineWidth = lw*1.4; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(d*w*1.35, 0); ctx.lineTo(d*w*2.5, 0);
+      ctx.moveTo(d*w*2.5, 0); ctx.lineTo(d*w*1.85, -s*0.045);
+      ctx.moveTo(d*w*2.5, 0); ctx.lineTo(d*w*1.85,  s*0.045);
+      ctx.stroke(); ctx.lineCap = 'butt';
+      break;
+    }
+    case 'STAR': {
+      const r = s * 0.14; ctx.beginPath();
+      for (let i = 0; i < 10; i++){
+        const a = -Math.PI/2 + i * Math.PI/5, rr = i % 2 ? r*0.46 : r;
+        i ? ctx.lineTo(Math.cos(a)*rr, Math.sin(a)*rr) : ctx.moveTo(Math.cos(a)*rr, Math.sin(a)*rr);
+      }
+      ctx.closePath();
+      ctx.fillStyle = col; ctx.fill();
+      ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke();
+      break;
+    }
+    case 'KNEES': {                                 // ladder strip on the floor
+      const w = s * 0.34, h = s * 0.04;
+      plate(-w, -h, w*2, h*2, INK, lw);
+      for (let i = 0; i < 5; i++){
+        if (i % 2) continue;
+        ctx.fillStyle = col;
+        ctx.fillRect(-w + i*(w*2/5) + lw, -h + lw, w*2/5 - lw*2, h*2 - lw*2);
+      }
+      break;
+    }
+    case 'LUNGE': {
+      const w = s * 0.33, h = s * 0.10, d = o.side === 'L' ? -1 : 1;
+      plate(-w, -h, w*2, h*2, null, lw);
+      ctx.strokeStyle = col; ctx.lineWidth = lw*1.6; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-d*w*0.35, 0); ctx.lineTo(d*w*0.8, 0);
+      ctx.moveTo(d*w*0.8, 0); ctx.lineTo(d*w*0.52, -h*0.5);
+      ctx.moveTo(d*w*0.8, 0); ctx.lineTo(d*w*0.52,  h*0.5);
+      ctx.stroke(); ctx.lineCap = 'butt';
+      break;
+    }
+    case 'HOPS': {
+      const r = s * 0.10;
+      for (const sx of [-1, 1]){
+        ctx.beginPath(); ctx.ellipse(sx*s*0.21, 0, r, r*0.42, 0, 0, 6.3);
+        ctx.fillStyle = col; ctx.fill();
+        ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke();
+      }
+      break;
+    }
+    case 'COMBO': {
+      const w = s * 0.28, h = s * 0.16;
+      plate(-w, -h, w*2, h*2, INK, lw);
+      plate(-w + lw*2, -h + lw*2, (w - lw*2)*2, (h - lw*2)*2, null, lw*0.6);
+      break;
+    }
+  }
+
+  // label chip on the front obstacle only, once it is close enough to read
+  if (isFront && o.z > 0.26 && !o.done){
+    const fs = clamp(s * 0.055, 9, 21);
+    let txt = def.label;
+    if (def.mode === 'combo')
+      txt = o.combo.slice(o.comboIdx).map(x => SIDE_WORD[x]).join(' › ') || 'COMBO';
+    else if (def.mode === 'rep' && def.need > 1 && o.armed)
+      txt = `${def.label} ${clamp(p.reps[def.key] - o.snapshot, 0, def.need)}/${def.need}`;
+    else if (def.sided) txt = `${def.label} ${arrowFor(def, o.side)}`;
+    const yOff = o.type === 'STAR' ? -s*0.21 :
+                 (o.type === 'KNEES' || o.type === 'HOPS') ? -s*0.13 : -s*0.23;
+    // an armed obstacle flips to lime so "act NOW" is unmissable
+    const live = o.armed;
+    chipText(txt, 0, yOff, fs, live ? LIME : '#fff', INK);
+  }
+  ctx.restore();
+}
+
+function drawGloves(p){
+  const tlPx = p.cal.torso * VT.vh * VT.scale;
+  const size = T.glove * tlPx;
+  const pairs = [[LM.wrL, LM.elL, true, 0], [LM.wrR, LM.elR, false, 1]];
+  for (const [wi, ei, flip, slot] of pairs){
+    const lmw = p.lm[wi], lme = p.lm[ei];
+    if ((lmw.visibility ?? 1) < 0.25) continue;
+    const x = toX(lmw.x), y = toY(lmw.y);
+    const ex = toX(lme.x), ey = toY(lme.y);
+    const ang = Math.atan2(y - ey, x - ex) + Math.PI/2;
+    const hot = (p.wrist[slot].speed || 0) > T.punch.speed;
+
+    ctx.save();
+    ctx.translate(x, y);
+    if (hot){                                      // flat speed bar behind a live punch
+      const w = p.wrist[slot];
+      ctx.save();
+      ctx.strokeStyle = LIME; ctx.globalAlpha = .85;
+      ctx.lineWidth = size*0.22; ctx.lineCap = 'butt';
+      ctx.beginPath(); ctx.moveTo(0, 0);
+      ctx.lineTo(-w.vx*0.04, -w.vy*0.04); ctx.stroke();
+      ctx.restore();
+    }
+    ctx.rotate(ang);
+    if (flip) ctx.scale(-1, 1);
+    ctx.shadowColor = 'rgba(23,27,23,.85)';        // hard sticker drop, not a glow
+    ctx.shadowBlur = 0; ctx.shadowOffsetX = size*0.05; ctx.shadowOffsetY = size*0.05;
+    ctx.drawImage(GLOVES[p.i], -size/2, -size/2, size, size);
+    ctx.restore();
+  }
+}
+
+const BONES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],
+               [23,25],[25,27],[24,26],[26,28]];
+const JOINTS = [0,11,12,13,14,15,16,23,24,25,26,27,28];
+// white armature with player-coloured joints, as on the reference's tracking panel
+function drawSkeleton(p){
+  ctx.save();
+  ctx.strokeStyle = '#fff'; ctx.globalAlpha = .9; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (const [a, b] of BONES){
+    const A = p.lm[a], B = p.lm[b];
+    if ((A.visibility ?? 1) < .2 || (B.visibility ?? 1) < .2) continue;
+    ctx.moveTo(toX(A.x), toY(A.y)); ctx.lineTo(toX(B.x), toY(B.y));
+  }
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.shadowColor = p.col.main; ctx.shadowBlur = 10;
+  for (const j of JOINTS){
+    const L = p.lm[j];
+    if ((L.visibility ?? 1) < .2) continue;
+    const r = j === 0 ? 11 : 5.5;
+    ctx.beginPath(); ctx.arc(toX(L.x), toY(L.y), r, 0, 6.3);
+    ctx.fillStyle = j === 0 ? 'transparent' : p.col.main; ctx.fill();
+    ctx.strokeStyle = p.col.main; ctx.lineWidth = j === 0 ? 3 : 2; ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// live read-out under each player of what their body is doing right now
+function drawCue(p){
+  const m = p.m;
+  const x = toX(m.hip.x / VT.aspect), y = toY(m.hip.y) + 30;
+  const bits = [];
+  if (p.state.dodge) bits.push('DODGE ' + p.state.dodge);
+  if (p.state.reach) bits.push('REACH');
+  if (p.state.kneeSide) bits.push('KNEE ' + p.state.kneeSide);
+  if (p.rc.squat.down) bits.push('SQUAT');
+  if (!bits.length) return;
+  ctx.save();
+  chipText(bits.join('  '), x, y, 11, p.col.main, '#fff');
+  ctx.restore();
+}
+
+function drawParticles(){
+  ctx.save();
+  for (const q of parts){
+    ctx.globalAlpha = clamp(q.life, 0, 1);
+    ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.rot);
+    ctx.fillStyle = q.col;
+    ctx.fillRect(-q.size/2, -q.size/2, q.size, q.size*0.75);
+    ctx.strokeStyle = INK; ctx.lineWidth = 1.5;
+    ctx.strokeRect(-q.size/2, -q.size/2, q.size, q.size*0.75);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawFlash(p){
+  const r = laneRect(p.i);
+  ctx.save();
+  ctx.globalAlpha = p.flash * 0.45;
+  const g = ctx.createLinearGradient(p.i ? r.x1 : r.x0, 0, p.i ? r.x0 : r.x1, 0);
+  g.addColorStop(0, p.flashCol); g.addColorStop(1, 'transparent');
+  ctx.fillStyle = g; ctx.fillRect(r.x0, 0, r.x1 - r.x0, CH);
+  ctx.restore();
+}
+
+/* ============================ HUD ============================ */
+const prev = [{}, {}];
+function paintHUD(){
+  for (let i = 0; i < 2; i++){
+    const p = players[i], n = i + 1, q = prev[i];
+    const sc = String(p.score).padStart(4, '0');       // 0000, like the scoreboard
+    if (q.score !== sc) $('s' + n).textContent = (q.score = sc);
+    if (q.combo !== p.combo) $('c' + n).textContent = 'x' + (q.combo = p.combo);
+    const tot = p.hits + p.misses;
+    const acc = tot ? Math.round(p.hits / tot * 100) : 0;
+    if (q.acc !== acc) $('a' + n).textContent = (q.acc = acc) + '% HIT';
+
+    const next = p.obstacles.filter(o => !o.done).sort((a, b) => b.z - a.z)[0];
+    let cue = '';
+    if (next){
+      const def = OB[next.type];
+      cue = def.mode === 'combo'
+        ? next.combo.slice(next.comboIdx).map(x => SIDE_WORD[x]).join(' › ')
+        : def.label;
+      if (def.sided) cue += ' ' + arrowFor(def, next.side);
+    }
+    if (q.cue !== cue) $('n' + n).textContent = (q.cue = cue);
+
+    const rh = Object.keys(REP_LABEL)
+      .map(k => `<span>${REP_ABBR[k]}<b>${p.reps[k]}</b></span>`).join('');
+    if (q.rh !== rh){ q.rh = rh; $('r' + n).innerHTML = rh; }
+
+    const badge = !p.cal ? 'NOT CALIBRATED' : !p.seen ? 'NOT DETECTED'
+                : p.warn ? 'FRAMING' : '';
+    if (q.badge !== badge) $('b' + n).innerHTML = (q.badge = badge) ? `<span class="warnchip">${badge}</span>` : '';
+  }
+  const secs = Math.max(0, T.sessionSecs - tPlay) | 0;
+  const clk = `${(secs/60)|0}:${String(secs%60).padStart(2,'0')}`;
+  if (prev[0].clk !== clk){ prev[0].clk = clk; $('clock').textContent = clk; }
+  const wv = phase === GS.PAUSE ? 'PAUSED' : String(wave);
+  if (prev[0].wv !== wv){ prev[0].wv = wv; $('wave').textContent = wv; }
+  $('fps').textContent = Math.round(fpsEMA) + ' FPS';
+
+  const warns = players.filter(p => p.warn && p.cal).map(p => `${p.col.name}: ${p.warn.toUpperCase()}`);
+  $('toast').textContent = warns.join('   ·   ');
+}
+
+function paintSummary(){
+  const [a, b] = players;
+  const both = a.cal && b.cal;
+  $('winner').innerHTML = !both ? 'WORKOUT <em>COMPLETE</em>'
+    : a.score === b.score ? `DEAD <em>HEAT</em> &mdash; ${a.score} EACH`
+    : a.score > b.score ? `<em>${a.col.name}</em> TAKES IT, ${a.score}&ndash;${b.score}`
+                        : `<em>${b.col.name}</em> TAKES IT, ${b.score}&ndash;${a.score}`;
+
+  const kcal = p => {
+    let k = 0;
+    for (const key in MET) k += p.reps[key] * (2/60) * MET[key] * 3.5 * 70 / 200;
+    return Math.round(k);
+  };
+  const totFor = (label, f, cls = '') =>
+    `<div class="tot ${cls}"><div class="tv">${f}</div><div class="tl">${label}</div></div>`;
+  const totalReps = p => Object.values(p.reps).reduce((s, v) => s + v, 0);
+  $('totals').innerHTML = [
+    totFor('NOVA &middot; P1', String(a.score).padStart(4,'0'), 'mint'),
+    totFor('BLAZE &middot; P2', String(b.score).padStart(4,'0'), 'salmon'),
+    totFor('TOTAL REPS', totalReps(a) + totalReps(b)),
+    totFor('BEST COMBO', 'x' + Math.max(a.bestCombo, b.bestCombo)),
+    totFor('MINUTES', (tPlay / 60).toFixed(1)),
+    totFor('EST. KCAL', kcal(a) + kcal(b)),
+  ].join('');
+
+  const rows = Object.keys(REP_LABEL).map(k =>
+    `<tr><td>${REP_LABEL[k]}</td><td class="v1">${a.reps[k]}</td><td class="v2">${b.reps[k]}</td></tr>`);
+  rows.push(`<tr><td><b>Obstacles cleared</b></td><td class="v1">${a.hits}/${a.hits+a.misses}</td>` +
+            `<td class="v2">${b.hits}/${b.hits+b.misses}</td></tr>`);
+  $('repTable').innerHTML = rows.join('');
+  $('calNote').innerHTML =
+    'Calorie figure is a <b>rough estimate only</b> — standard MET values against an assumed 70&nbsp;kg ' +
+    'and ~2&nbsp;s of effort per rep. Treat it as a relative measure between sessions, not a medical number. ' +
+    'Side lunges, skater hops and boxing combos are detected less precisely than squats, jacks and high knees, ' +
+    'because a single camera cannot see depth.';
+}
+
+/* ========================= keyboard ========================= */
+function setSkel(v){ showSkel = v; $('skelBtn').setAttribute('aria-pressed', String(v)); }
+$('skelBtn').addEventListener('click', () => setSkel(!showSkel));
+
+function setSnd(v){ SFX.set(v); $('sndBtn').setAttribute('aria-pressed', String(v)); }
+$('sndBtn').addEventListener('click', () => setSnd(!SFX.on));
+$('sndBtn').setAttribute('aria-pressed', String(SFX.on));   // restore saved choice
+
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 's') setSkel(!showSkel);
+  else if (k === 'm') setSnd(!SFX.on);
+  else if (k === 'c' && phase !== GS.START){ startSession(true); }
+  else if (k === 'p'){
+    if (phase === GS.PLAY){ phase = GS.PAUSE; }
+    else if (phase === GS.PAUSE){ phase = GS.PLAY; lastT = performance.now(); }
+  }
+  else if (k === 'e' && (phase === GS.PLAY || phase === GS.PAUSE)) endSession();
+});
+addEventListener('visibilitychange', () => {
+  if (document.hidden && phase === GS.PLAY) phase = GS.PAUSE;
+  lastT = performance.now();
+});
+
+/* ===================== self-test hook =====================
+   Exposes the real detectors so synthetic pose sequences can be driven
+   through them without a camera. Used to measure rep accuracy; harmless
+   in normal play. In the console:  __MG.selfTest()                    */
+window.__MG = { T, players, metricsOf, runDetectors, adaptCal, OB, VT, median,
+  assignPoses, resolve, obPlacement, spawn, toX, toY, SFX, dims:() => ({ CW, CH }),
+  // force a known stage size so tests do not depend on which screen is showing
+  setStage(w, h){ CW = w; CH = h; },
+  realStage(){ resize(); },
+  // pretend a 1280x720 camera covers the current stage
+  fakeCamera(){
+    Object.assign(VT, { vw:1280, vh:720, aspect:1280/720 });
+    VT.scale = Math.max(CW/1280, CH/720);
+    VT.offX = (CW - 1280*VT.scale)/2; VT.offY = (CH - 720*VT.scale)/2;
+  },
+  // Frozen preview of the course with no camera: seeds one of every obstacle
+  // type down the track so the rendering can be inspected on its own.
+  demo(types){
+    // show the stage FIRST: it has zero size while hidden, and a transform
+    // computed against that gives a scale of ~0.001 and invisible gloves
+    phase = GS.PAUSE; setScreen(null); startLoop();
+    this.fakeCamera();
+    const nm = metricsOf(this.pose());
+    const cal = { torso:nm.torso, hipY:nm.hip.y, shY:nm.sh.y, kneeY:nm.knee.y, noseY:nm.nose.y,
+                  ankSpread:nm.ankleSpread, centerX:nm.hip.x, armL:nm.armL, armR:nm.armR };
+    const keys = types || Object.keys(OB);
+    players.forEach((p, i) => {
+      p.reset(false); p.cal = cal; p.score = 1200 + i*430; p.combo = 3 + i;
+      p.hits = 12 + i*3; p.misses = 4;
+      Object.keys(p.reps).forEach((k, j) => { p.reps[k] = 3 + j*2 + i; });
+      // raw x is mirrored, so raw 0.72 lands on the LEFT half (player 1)
+      const lm = this.pose({ reachL: i ? 0.14 : 0 });
+      const nx = i ? 0.28 : 0.72;
+      lm.forEach(q => q.x += nx - 0.5);
+      p.lm = lm; p.m = metricsOf(lm); p.seen = true; p.lost = 0; p.warn = '';
+      p.wrist.forEach(w => { w.ok = true; w.speed = 0; });
+      p.obstacles = keys.map((t, j) => {
+        const def = OB[t];
+        return { type:t, z: 0.28 + j*0.26 + i*0.05, speed:0,
+          side: def.sided ? (j % 2 ? 'L' : 'R') : null,
+          armed:false, snapshot:0, done:false, result:null, shake:0,
+          combo: def.mode === 'combo' ? ['L','R'] : null, comboIdx:0 };
+      });
+    });
+    return 'frozen demo: ' + keys.join(', ');
+  },
+  // Build a 33-landmark frame for a standing body, with pose knobs applied.
+  // Units are normalized frame coords, as MediaPipe reports them.
+  pose({ hipDrop=0, armsUp=0, feetWide=0, kneeL=0, kneeR=0, shiftX=0,
+         handsY=null, torsoScale=1, legLift=0, reachL=0, reachR=0 } = {}){
+    const cx = 0.5 + shiftX, tl = 0.16 * torsoScale;
+    const hipY = 0.46 + hipDrop*0.6;        // hips fixed under a hinge, so a
+    const shY  = hipY - tl;                 // forward bend only shortens torso
+    const kneeBase = hipY + 0.17, ankY = 0.92;
+    const halfSh = 0.075, halfHip = 0.055;
+    const wy = handsY != null ? handsY : (armsUp ? shY - 0.16 : hipY + 0.06);
+    const L = Array.from({ length:33 }, () => ({ x:cx, y:0.5, z:0, visibility:0.95 }));
+    const set = (i,x,y) => { L[i] = { x, y, z:0, visibility:0.95 }; };
+    set(0,  cx, shY - 0.19);                                   // nose
+    set(11, cx+halfSh, shY);  set(12, cx-halfSh, shY);         // anatomical L = +x in raw frame
+    set(13, cx+halfSh+.02+reachL*.5, shY+0.09-reachL*.02);
+    set(14, cx-halfSh-.02-reachR*.5, shY+0.09-reachR*.02);
+    set(15, cx+halfSh+.03+reachL, wy-reachL*.02);              // left wrist
+    set(16, cx-halfSh-.03-reachR, wy-reachR*.02);              // right wrist
+    set(23, cx+halfHip, hipY); set(24, cx-halfHip, hipY);
+    set(25, cx+halfHip+feetWide*0.5, kneeBase - kneeL*0.19);
+    set(26, cx-halfHip-feetWide*0.5, kneeBase - kneeR*0.19);
+    set(27, cx+halfHip+feetWide, ankY - legLift*0.06 - kneeL*0.12);
+    set(28, cx-halfHip-feetWide, ankY - kneeR*0.12);
+    return L;
+  },
+  selfTest(verbose){
+    const savedVT = { ...VT };
+    this.setStage(1280, 720);
+    Object.assign(VT, { vw:1280, vh:720, aspect:1280/720, scale:1, offX:0, offY:0 });
+    const mk = () => {                       // fresh calibrated player per case
+      const p = new players[0].constructor(0);
+      const nm = metricsOf(this.pose());
+      p.cal = { torso:nm.torso, hipY:nm.hip.y, shY:nm.sh.y, kneeY:nm.knee.y, noseY:nm.nose.y,
+                ankSpread:nm.ankleSpread, centerX:nm.hip.x, armL:nm.armL, armR:nm.armR };
+      p.t = 0;
+      p.feed = knobs => { p.t += 40; p.lm = this.pose(knobs);
+        const m = metricsOf(p.lm); p.m = m; runDetectors(p, m, p.t, 0.04); };
+      // hold a pose for `frames` at 40 ms/frame (25 fps, a realistic cadence)
+      p.hold = (knobs, frames) => { for (let k = 0; k < frames; k++) p.feed(knobs); };
+      return p;
+    };
+    const R = {};
+    const run = (key, fn) => { const p = mk(); fn(p); return p.reps[key]; };
+    const pos = (name, key, fn) => { R[name] = run(key, fn); };
+
+    // --- 10 clean reps of each, at human speed (~1 rep/sec) ---
+    pos('squat','squat',  p => { for (let i=0;i<10;i++){ p.hold({hipDrop:0.14},12); p.hold({},12); } });
+    pos('jack','jack',    p => { for (let i=0;i<10;i++){ p.hold({armsUp:1,feetWide:0.085},11); p.hold({},11); } });
+    pos('knee','knee',    p => { for (let i=0;i<10;i++){ p.hold({kneeL:i%2?0:1,kneeR:i%2?1:0},6); p.hold({},5); } });
+    pos('reach','reach',  p => { for (let i=0;i<10;i++){ p.hold({handsY:0.04},10); p.hold({},10); } });
+    pos('dodge','dodge',  p => { for (let i=0;i<10;i++){ p.hold({shiftX:0.075},10); p.hold({shiftX:0},10); } });
+    pos('lunge','lunge',  p => { for (let i=0;i<10;i++){ p.hold({shiftX:0.07,feetWide:0.1,hipDrop:0.10},13); p.hold({},13); } });
+    pos('hop','hop',      p => { for (let i=0;i<10;i++){
+      p.hold({shiftX:i%2?0.07:-0.07, legLift:i%2?1:0, kneeL:i%2?0:1}, 9); p.hold({},3); } });
+    // one-arm punches: out over 3 frames, snap back, rest
+    pos('punch','punch',  p => { for (let i=0;i<10;i++){
+      for (const e of [0.07,0.15,0.22]) p.hold({reachL:e},1);
+      p.hold({reachL:0.22},3);
+      for (const e of [0.15,0.07,0]) p.hold({reachL:e},1);
+      p.hold({},8); } });
+
+    // --- negative tests: each must come back 0 ---
+    const neg = {
+      // bending forward at the hips is not a squat
+      hingeNotSquat: run('squat', p => {
+        for (let i=0;i<10;i++){ p.hold({torsoScale:0.45},12); p.hold({},12); } }),
+      // a slow hand drift across the screen is not a punch
+      driftNotPunch: run('punch', p => {
+        for (let i=0;i<=40;i++) p.hold({reachL:i*0.006},1); }),
+      // squatting fast must not manufacture punches (whole body translates)
+      squatNotPunch: run('punch', p => {
+        for (let i=0;i<10;i++){ p.hold({hipDrop:0.14},3); p.hold({},3); } }),
+      // throwing the arms overhead must not manufacture punches either
+      armsUpNotPunch: run('punch', p => {
+        for (let i=0;i<10;i++){ p.hold({armsUp:1},11); p.hold({},11); } }),
+      // arms up without feet apart is not a jumping jack
+      armsOnlyNotJack: run('jack', p => {
+        for (let i=0;i<10;i++){ p.hold({armsUp:1},11); p.hold({},11); } }),
+      // one leg pumping alone is not high knees (alternation required)
+      oneLegNotKnees: run('knee', p => {
+        for (let i=0;i<10;i++){ p.hold({kneeL:1},6); p.hold({},5); } }),
+    };
+
+    Object.assign(VT, savedVT); this.realStage();
+    // oneLegNotKnees counts the very first lift by design - alternation only
+    // blocks the REPEATS - so 1 is a pass there and 0 everywhere else
+    const negMax = { oneLegNotKnees:1 };
+    const repsOK = Object.values(R).every(v => v === 10);
+    const negOK  = Object.entries(neg).every(([k, v]) => v <= (negMax[k] ?? 0));
+    const out = { reps:R, expectedEach:10, falsePositives:neg, pass: repsOK && negOK };
+    if (verbose){ console.table(R); console.table(neg); }
+    return out;
+  },
+
+  // Scenario tests for the two failures that silently corrupt scores:
+  // players swapping identity when they cross, and a parked hand farming hits.
+  scenarioTest(){
+    const savedVT = { ...VT };
+    // pin a known stage, otherwise this measures nothing when run from the
+    // start screen (the canvas is 0x0 there and every distance collapses)
+    this.setStage(1280, 720);
+    this.fakeCamera();
+    const out = {};
+
+    /* --- 1. sticky identity across a crossing --- */
+    const body = (nx, tag) => { const L = this.pose(); L.forEach(p => p.x += nx - 0.5);
+                                L.tag = tag; return L; };
+    // count TRANSITIONS, not frames spent swapped
+    const flipsOver = steps => {
+      for (const p of players){ p.lastCx = null; p.lm = null; }
+      let prev = null, flips = 0;
+      for (const [A, B] of steps){
+        assignPoses([body(A,'A'), body(B,'B')]);
+        const tag = players[0].lm.tag;
+        if (prev !== null && tag !== prev) flips++;
+        prev = tag;
+      }
+      return flips;
+    };
+
+    // realistic play: each player dodges within their own half, never crossing.
+    // identity must be rock solid here - this is what corrupts scores.
+    const dodging = [];
+    for (let s = 0; s <= 120; s++){
+      const w = Math.sin(s/3);                    // fast lateral dodging
+      dodging.push([0.25 + 0.06*w, 0.75 - 0.06*Math.sin(s/3 + 1.1)]);
+    }
+    out.flipsWhileDodging = flipsOver(dodging);   // want 0
+
+    // players deliberately walk through each other and swap sides. Position
+    // alone cannot preserve identity through that, so one clean handover is
+    // the correct answer - what must not happen is chaotic flicker.
+    const crossing = [];
+    for (let s = 0; s <= 24; s++) crossing.push([0.25 + 0.5*(s/24), 0.75 - 0.5*(s/24)]);
+    out.flipsWhileCrossing = flipsOver(crossing); // want <= 1
+
+    /* --- 2. a parked glove on a block must not score --- */
+    const p = new players[0].constructor(0);
+    const nm = metricsOf(this.pose());
+    p.cal = { torso:nm.torso, hipY:nm.hip.y, shY:nm.sh.y, kneeY:nm.knee.y, noseY:nm.nose.y,
+              ankSpread:nm.ankleSpread, centerX:nm.hip.x, armL:nm.armL, armR:nm.armR };
+    p.obstacles = [];
+    spawn(p, 0, 1);
+    const o = p.obstacles[0]; o.type = 'ICE'; o.z = 0.85;
+    const place = obPlacement(o, 0);
+    // put both gloves exactly on the block
+    for (const w of p.wrist){ w.ok = true; w.x = place.x; w.y = place.y; w.armed = false; }
+    out.restingGloveScores = resolve(p, o, 0);               // want false
+    p.wrist[0].armed = true;                                 // mid-punch
+    out.movingGloveScores = resolve(p, o, 0);                // want true
+    // and a fast glove nowhere near the block must not score
+    p.wrist[0].x = place.x + place.laneW; p.wrist[1].x = place.x + place.laneW;
+    out.missedGloveScores = resolve(p, o, 0);                // want false
+
+    Object.assign(VT, savedVT); this.realStage();
+    out.pass = out.flipsWhileDodging === 0 &&
+               out.flipsWhileCrossing <= 1 &&
+               out.restingGloveScores === false &&
+               out.movingGloveScores === true &&
+               out.missedGloveScores === false;
+    return out;
+  },
+};
+</script>
+</body>
+</html>
