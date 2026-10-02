@@ -31,10 +31,10 @@ Everything is one self-contained file: [index.html](index.html).
 ## Run it
 
 `getUserMedia` only works in a secure context, so `file://` **will not work**.
-Serve the folder:
+Serve the repo folder:
 
 ```bash
-python3 -m http.server 8777 --directory ~/Documents/projects/motion-gym
+python3 -m http.server 8777
 ```
 
 Then open <http://localhost:8777> in Chrome and allow the camera.
