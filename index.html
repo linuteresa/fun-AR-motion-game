@@ -368,8 +368,16 @@ const T = {
   refract: 260,                              // ms between reps of the same move
   framing: { ankleVis:0.25, ankleY:0.985 },
   glove:   0.55,                             // sprite size in torso-lengths
-  waveSecs: 45,
-  sessionSecs: 300,
+  waveSecs: 40,
+  sessionSecs: 120,
+  // Approach speed in z-units/second. Deliberately gentle: an obstacle takes
+  // roughly 9 seconds to reach you at wave 1, so there is time to read the
+  // label, decide, and move.
+  speed: { base:0.105, perWave:0.012, jitter:0.02 },
+  // the next obstacle only appears once the current one is this far along,
+  // so each lane shows one clear instruction at a time
+  nextAt: 0.52,
+  comboBonus: { 3:150, 5:400, 8:1000 },   // one-off bonuses for streaks
 };
 
 /* ===================== glove sprite (Twemoji) ===================== */
@@ -401,16 +409,12 @@ const GLOVES = COL.map(gloveImage);
 // sided: obstacle picks a side. away=true means "move the OTHER way"
 // (dodge a wall); away=false means "move toward the mark" (side lunge).
 const OB = {
-  ICE:   { label:'PUNCH',        mode:'hit',   wave:1, col:'#C6FF48', yb:0.26, win:[.70,1.06], pts:100 },
-  LOWBAR:{ label:'SQUAT',        mode:'rep',   key:'squat', need:1, wave:1, col:'#FFFFFF', yb:0.30, win:[.62,1.08], pts:160 },
-  GATE:  { label:'JUMPING JACK', mode:'rep',   key:'jack',  need:1, wave:1, col:'#C6FF48', yb:0.22, win:[.60,1.08], pts:160 },
-  WALL:  { label:'DODGE',        mode:'state', key:'dodge', wave:2, col:'#FF775F', yb:0.20, win:[.66,1.06], pts:120, sided:true, away:true },
-  STAR:  { label:'REACH UP',     mode:'state', key:'reach', wave:2, col:'#C6FF48', yb:0.44, win:[.66,1.08], pts:110 },
-  KNEES: { label:'HIGH KNEES',   mode:'rep',   key:'knee',  need:4, wave:3, col:'#C5F0ED', yb:0.02, win:[.46,1.14], pts:220 },
-  LUNGE: { label:'SIDE LUNGE',   mode:'rep',   key:'lunge', need:1, wave:3, col:'#FF775F', yb:0.14, win:[.56,1.10], pts:200,
-           sided:true, away:false, sideState:'lungeSide' },
-  HOPS:  { label:'SKATER HOPS',  mode:'rep',   key:'hop',   need:2, wave:4, col:'#18A694', yb:0.02, win:[.50,1.12], pts:240 },
-  COMBO: { label:'COMBO',        mode:'combo', wave:4, col:'#FFFFFF', yb:0.26, win:[.46,1.16], pts:300 },
+  ICE:   { label:'PUNCH',        mode:'hit',   wave:1, col:'#C6FF48', yb:0.26, win:[.66,1.10], pts:100 },
+  GATE:  { label:'JUMPING JACK', mode:'rep',   key:'jack',  need:1, wave:1, col:'#C6FF48', yb:0.22, win:[.56,1.12], pts:160 },
+  STAR:  { label:'REACH UP',     mode:'state', key:'reach', wave:1, col:'#C6FF48', yb:0.44, win:[.60,1.12], pts:110 },
+  WALL:  { label:'DODGE',        mode:'state', key:'dodge', wave:2, col:'#FF775F', yb:0.20, win:[.60,1.10], pts:120, sided:true, away:true },
+  KNEES: { label:'HIGH KNEES',   mode:'rep',   key:'knee',  need:3, wave:2, col:'#C5F0ED', yb:0.02, win:[.42,1.18], pts:220 },
+  COMBO: { label:'COMBO',        mode:'combo', wave:3, col:'#FFFFFF', yb:0.26, win:[.42,1.20], pts:300 },
 };
 const SIDE_WORD = { L:'LEFT', R:'RIGHT' };
 // arrow the player should follow, in mirrored screen terms
@@ -418,24 +422,23 @@ const arrowFor = (def, side) => (def.away ? (side === 'L' ? '→' : '←')
                                           : (side === 'L' ? '←' : '→'));
 const OB_KEYS = Object.keys(OB);
 
-const REP_LABEL = { squat:'Squats', jack:'Jacks', knee:'High knees', lunge:'Lunges',
-                    hop:'Skater hops', punch:'Punches', reach:'Reaches', dodge:'Dodges' };
+// Only the moves the game actually asks for. The squat, lunge and skater-hop
+// detectors still exist and still pass their tests - they just have no
+// obstacle pointing at them, so re-enabling one is a single OB entry.
+const REP_LABEL = { jack:'Jacks', knee:'High knees',
+                    punch:'Punches', reach:'Reaches', dodge:'Dodges' };
 // compact forms for the in-game scoreboard strip
-const REP_ABBR  = { squat:'SQT', jack:'JAK', knee:'KNE', lunge:'LUN',
-                    hop:'HOP', punch:'PCH', reach:'RCH', dodge:'DGE' };
+const REP_ABBR  = { jack:'JAK', knee:'KNE', punch:'PCH', reach:'RCH', dodge:'DGE' };
 // Rough MET values, used only for the clearly-labelled calorie estimate.
-const MET = { squat:5.0, jack:8.0, knee:8.0, lunge:5.0, hop:8.0, punch:7.8, reach:3.5, dodge:6.0 };
+const MET = { jack:8.0, knee:8.0, punch:7.8, reach:3.5, dodge:6.0 };
 
 /* ====================== move guide on start ====================== */
 const GUIDE = [
   ['ICE',   '→','PUNCH',        'Drive a glove through the block. A resting hand will not score.'],
-  ['LOWBAR','↓','SQUAT',        'Drop your hips - chest up, do not bend over.'],
   ['GATE',  '↕','JUMPING JACK', 'Arms above your shoulders and feet wide, then back together.'],
-  ['WALL',  '⇄','DODGE',        'Side-step away from the marked side.'],
   ['STAR',  '↑','REACH UP',     'Both hands above your head.'],
+  ['WALL',  '⇄','DODGE',        'Side-step away from the marked side.'],
   ['KNEES', '⤒','HIGH KNEES',   'Drive knees up, alternating. One leg alone will not count.'],
-  ['LUNGE', '↙','SIDE LUNGE',   'Wide step to the marked side and sink over that leg.'],
-  ['HOPS',  '⤨','SKATER HOPS',  'Hop side to side, landing on alternate feet.'],
   ['COMBO', '◈','BOXING COMBO', 'Land the shown punches in order (your own left / right).'],
 ];
 document.getElementById('moveGuide').innerHTML = GUIDE.map(([k,g,t,d]) =>
@@ -633,9 +636,11 @@ class Player{
   }
   reset(hard){
     this.score = 0; this.combo = 1; this.bestCombo = 1;
+    this.comboScore = 0;          // points that came from the multiplier alone
+    this.comboHit = {};           // milestone bonuses already paid out
     this.hits = 0; this.misses = 0;
     this.obstacles = [];
-    this.spawnAt = 0;
+    this.spawnAt = 0; this.lastType = null;
     this.flash = 0; this.flashCol = null;
     this.reps = { squat:0, jack:0, knee:0, lunge:0, hop:0, punch:0, reach:0, dodge:0 };
     this.rc = {
@@ -841,10 +846,14 @@ function obPlacement(o, i){
 
 function spawn(p, now, wave){
   const pool = OB_KEYS.filter(k => OB[k].wave <= wave);
-  const type = pool[(Math.random() * pool.length) | 0];
+  // avoid repeating the move that just came past - variety reads as clearer
+  const choices = pool.length > 1 ? pool.filter(k => k !== p.lastType) : pool;
+  const type = choices[(Math.random() * choices.length) | 0];
+  p.lastType = type;
   const def  = OB[type];
+  const S = T.speed;
   const o = {
-    type, z:0, speed: 0.17 + 0.035 * (wave - 1) + Math.random() * 0.07,
+    type, z:0, speed: S.base + S.perWave * (wave - 1) + Math.random() * S.jitter,
     side: def.sided ? (Math.random() < 0.5 ? 'L' : 'R') : null,
     armed:false, snapshot:0, done:false, result:null, shake:0,
   };
@@ -902,18 +911,36 @@ function resolve(p, o, now){
 
 function award(p, o, ok, now){
   const def = OB[o.type];
+  const pl = obPlacement(o, p.i);
   o.done = true; o.result = ok ? 'hit' : 'miss'; o.fade = 1;
   if (ok){
     p.hits++;
-    p.score += Math.round(def.pts * p.combo);
+    const gained = Math.round(def.pts * p.combo);
+    p.score += gained;
     p.combo = Math.min(8, p.combo + 1);
     p.bestCombo = Math.max(p.bestCombo, p.combo);
-    const pl = obPlacement(o, p.i);
+    p.comboScore += gained - def.pts;            // how much the streak is worth
+
+    // every point that lands gets shown where it happened, so the score
+    // is something you can watch rather than a number that moves silently
+    pop(pl.x, pl.y, `+${gained}`, p.col.main, p.combo > 2 ? 1.25 : 1);
+    if (p.combo > 2) pop(pl.x, pl.y - 34, `x${p.combo} STREAK`, LIME, .82);
+
+    // one-off bonus for reaching a streak milestone
+    const bonus = T.comboBonus[p.combo];
+    if (bonus && !p.comboHit[p.combo]){
+      p.comboHit[p.combo] = true;
+      p.score += bonus; p.comboScore += bonus;
+      pop(pl.x, pl.y - 68, `COMBO BONUS +${bonus}`, LIME, 1.1, 2.1);
+      SFX.wave();
+    }
     shatter(pl.x, pl.y, def.col, 0.17 * pl.laneW * pl.sc);
     p.flash = 0.22; p.flashCol = p.col.main;
     SFX.hit(p.combo);
   } else {
-    p.misses++; p.combo = 1;
+    p.misses++;
+    if (p.combo > 2) pop(pl.x, pl.y, 'STREAK LOST', '#FF775F', .85, 1.5);
+    p.combo = 1;
     p.flash = 0.3; p.flashCol = '#FF775F'; o.shake = 1;
     SFX.miss();
   }
@@ -937,6 +964,18 @@ function updateParts(dt){
     q.rot += q.vr*dt; q.life -= dt * 1.5;
     if (q.life <= 0) parts.splice(i, 1);
   }
+  for (let i = pops.length - 1; i >= 0; i--){
+    const q = pops[i];
+    q.y -= 54 * dt; q.life -= dt / q.ttl;
+    if (q.life <= 0) pops.splice(i, 1);
+  }
+}
+
+/* --------- floating score callouts, so points are legible in place --------- */
+const pops = [];
+function pop(x, y, text, col, scale = 1, ttl = 1.15){
+  if (pops.length > 24) pops.shift();
+  pops.push({ x, y, text, col, scale, ttl, life:1 });
 }
 
 /* ======================== game state ======================== */
@@ -1023,7 +1062,7 @@ async function boot(){
 
 function startSession(recalibrate){
   for (const p of players) p.reset(recalibrate);
-  parts.length = 0;
+  parts.length = 0; pops.length = 0;
   tPlay = 0; wave = 1;
   if (recalibrate || !players.some(p => p.cal)){
     calSamples = [[], []]; calStart = performance.now();
@@ -1148,7 +1187,7 @@ function beginPlay(now){
 
 function stepPlay(now, dt){
   tPlay += dt;
-  const w = Math.min(6, 1 + Math.floor(tPlay / T.waveSecs));
+  const w = Math.min(3, 1 + Math.floor(tPlay / T.waveSecs));   // 3 waves in 2 minutes
   if (w !== wave){ wave = w; SFX.wave(); }
   if (tPlay >= T.sessionSecs){ endSession(); return; }
 
@@ -1156,12 +1195,15 @@ function stepPlay(now, dt){
     p.flash = Math.max(0, p.flash - dt * 3);
     if (!p.cal) continue;
 
-    // spawning pauses while a player is out of frame, so they are not
-    // charged misses for obstacles they never had a chance to see
-    const interval = Math.max(950, 2300 - 190 * (wave - 1));
-    if (p.live && now >= p.spawnAt){
+    // Spawning pauses while a player is out of frame, so they are not charged
+    // misses for obstacles they never had a chance to see. It also waits until
+    // the previous obstacle is well down the track: one instruction on screen
+    // at a time is the single biggest thing that makes this followable.
+    const live = p.obstacles.filter(o => !o.done);
+    const clearAhead = live.length === 0 || live.every(o => o.z >= T.nextAt);
+    if (p.live && clearAhead && now >= p.spawnAt){
       spawn(p, now, wave);
-      p.spawnAt = now + interval * (0.78 + Math.random() * 0.5);
+      p.spawnAt = now + 400 + Math.random() * 500;   // small breather between moves
     }
 
     for (let i = p.obstacles.length - 1; i >= 0; i--){
@@ -1232,7 +1274,23 @@ function render(now){
     drawCue(p);
   }
   drawParticles();
+  drawPops();
   for (const p of players) if (p.flash > 0) drawFlash(p);
+}
+
+function drawPops(){
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const q of pops){
+    const a = clamp(q.life * 1.6, 0, 1);
+    const fs = 20 * q.scale;
+    ctx.globalAlpha = a;
+    ctx.font = `${fs}px ${DISPLAY}`;
+    ctx.lineWidth = fs * 0.42; ctx.strokeStyle = INK; ctx.lineJoin = 'round';
+    ctx.strokeText(q.text, q.x, q.y);
+    ctx.fillStyle = q.col; ctx.fillText(q.text, q.x, q.y);
+  }
+  ctx.restore();
 }
 
 function drawGround(){
@@ -1289,6 +1347,7 @@ function chipText(txt, x, y, fs, bg, fg){
   const w = ctx.measureText(txt).width, px = fs*0.52, py = fs*0.40;
   plate(x - w/2 - px, y - fs/2 - py, w + px*2, fs + py*2, bg, 2);
   ctx.fillStyle = fg; ctx.fillText(txt, x, y);
+  return { w: w + px*2, h: fs + py*2 };          // so a bar can match its width
 }
 
 function drawObstacle(p, o, isFront){
@@ -1319,15 +1378,6 @@ function drawObstacle(p, o, isFront){
       ctx.fillStyle = INK; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText('BREAK', 0, 0);
       ctx.restore();
-      break;
-    }
-    case 'LOWBAR': {                                // duck under this bar
-      const w = s * 0.38, h = s * 0.05;
-      plate(-w, -h, w*2, h*2, col, lw);
-      ctx.strokeStyle = INK; ctx.lineWidth = lw;
-      ctx.beginPath();
-      for (const sx of [-1, 1]){ ctx.moveTo(sx*w*0.92, h); ctx.lineTo(sx*w*0.92, h + s*0.26); }
-      ctx.stroke();
       break;
     }
     case 'GATE': {                                  // star-jump gate
@@ -1374,26 +1424,6 @@ function drawObstacle(p, o, isFront){
       }
       break;
     }
-    case 'LUNGE': {
-      const w = s * 0.33, h = s * 0.10, d = o.side === 'L' ? -1 : 1;
-      plate(-w, -h, w*2, h*2, null, lw);
-      ctx.strokeStyle = col; ctx.lineWidth = lw*1.6; ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(-d*w*0.35, 0); ctx.lineTo(d*w*0.8, 0);
-      ctx.moveTo(d*w*0.8, 0); ctx.lineTo(d*w*0.52, -h*0.5);
-      ctx.moveTo(d*w*0.8, 0); ctx.lineTo(d*w*0.52,  h*0.5);
-      ctx.stroke(); ctx.lineCap = 'butt';
-      break;
-    }
-    case 'HOPS': {
-      const r = s * 0.10;
-      for (const sx of [-1, 1]){
-        ctx.beginPath(); ctx.ellipse(sx*s*0.21, 0, r, r*0.42, 0, 0, 6.3);
-        ctx.fillStyle = col; ctx.fill();
-        ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke();
-      }
-      break;
-    }
     case 'COMBO': {
       const w = s * 0.28, h = s * 0.16;
       plate(-w, -h, w*2, h*2, INK, lw);
@@ -1402,20 +1432,54 @@ function drawObstacle(p, o, isFront){
     }
   }
 
-  // label chip on the front obstacle only, once it is close enough to read
-  if (isFront && o.z > 0.26 && !o.done){
-    const fs = clamp(s * 0.055, 9, 21);
+  // --- armed state: lime brackets snapped around the obstacle. This is the
+  // "do it NOW" signal, and it has to be readable at a glance from 2m away ---
+  if (o.armed && !o.done){
+    const r = s * 0.34, k = r * 0.42;
+    const t = performance.now() * 0.009;
+    const grow = 1 + 0.06 * (0.5 + 0.5 * Math.sin(t));       // slow breathing pulse
+    ctx.save();
+    ctx.strokeStyle = LIME; ctx.lineWidth = Math.max(3, lw*1.5); ctx.lineCap = 'butt';
+    const R = r * grow;
+    ctx.beginPath();
+    for (const [sx, sy] of [[-1,-1],[1,-1],[-1,1],[1,1]]){
+      ctx.moveTo(sx*R, sy*R - sy*k); ctx.lineTo(sx*R, sy*R);
+      ctx.lineTo(sx*R - sx*k, sy*R);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // --- label on the front obstacle, visible from the moment it appears and
+  // never smaller than readable. Knowing WHAT is coming early is most of
+  // what makes the course followable. ---
+  if (isFront && !o.done){
+    const fs = clamp(s * 0.07, 15, 27);
     let txt = def.label;
     if (def.mode === 'combo')
       txt = o.combo.slice(o.comboIdx).map(x => SIDE_WORD[x]).join(' › ') || 'COMBO';
     else if (def.mode === 'rep' && def.need > 1 && o.armed)
       txt = `${def.label} ${clamp(p.reps[def.key] - o.snapshot, 0, def.need)}/${def.need}`;
     else if (def.sided) txt = `${def.label} ${arrowFor(def, o.side)}`;
-    const yOff = o.type === 'STAR' ? -s*0.21 :
-                 (o.type === 'KNEES' || o.type === 'HOPS') ? -s*0.13 : -s*0.23;
-    // an armed obstacle flips to lime so "act NOW" is unmissable
-    const live = o.armed;
-    chipText(txt, 0, yOff, fs, live ? LIME : '#fff', INK);
+    const yOff = o.type === 'STAR' ? -s*0.24 : o.type === 'KNEES' ? -s*0.16 : -s*0.26;
+    const chip = chipText(txt, 0, yOff, fs, o.armed ? LIME : '#fff', INK);
+
+    // --- approach bar: fills as the obstacle closes, flips to GO when live.
+    // This answers "when", which the shapes alone never did. ---
+    const bw = chip.w, bh = Math.max(13, fs*0.62);
+    const by = yOff + chip.h/2 + bh*0.22;
+    const frac = clamp(o.z / def.win[0], 0, 1);
+    plate(-bw/2, by, bw, bh, 'rgba(23,27,23,.78)', 2);
+    if (o.armed){
+      ctx.fillStyle = LIME;
+      ctx.fillRect(-bw/2 + 2, by + 2, bw - 4, bh - 4);
+      ctx.font = `${bh*0.74}px ${DISPLAY}`;
+      ctx.fillStyle = INK; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('GO', 0, by + bh/2 + 0.5);
+    } else {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(-bw/2 + 2, by + 2, (bw - 4) * frac, bh - 4);
+    }
   }
   ctx.restore();
 }
@@ -1581,12 +1645,14 @@ function paintSummary(){
     totFor('BLAZE &middot; P2', String(b.score).padStart(4,'0'), 'salmon'),
     totFor('TOTAL REPS', totalReps(a) + totalReps(b)),
     totFor('BEST COMBO', 'x' + Math.max(a.bestCombo, b.bestCombo)),
-    totFor('MINUTES', (tPlay / 60).toFixed(1)),
+    totFor('FROM COMBOS', a.comboScore + b.comboScore),
     totFor('EST. KCAL', kcal(a) + kcal(b)),
   ].join('');
 
   const rows = Object.keys(REP_LABEL).map(k =>
     `<tr><td>${REP_LABEL[k]}</td><td class="v1">${a.reps[k]}</td><td class="v2">${b.reps[k]}</td></tr>`);
+  rows.push(`<tr><td>Best streak</td><td class="v1">x${a.bestCombo}</td><td class="v2">x${b.bestCombo}</td></tr>`);
+  rows.push(`<tr><td>Points from streaks</td><td class="v1">${a.comboScore}</td><td class="v2">${b.comboScore}</td></tr>`);
   rows.push(`<tr><td><b>Obstacles cleared</b></td><td class="v1">${a.hits}/${a.hits+a.misses}</td>` +
             `<td class="v2">${b.hits}/${b.hits+b.misses}</td></tr>`);
   $('repTable').innerHTML = rows.join('');
@@ -1626,7 +1692,29 @@ addEventListener('visibilitychange', () => {
    through them without a camera. Used to measure rep accuracy; harmless
    in normal play. In the console:  __MG.selfTest()                    */
 window.__MG = { T, players, metricsOf, runDetectors, adaptCal, OB, VT, median,
-  assignPoses, resolve, obPlacement, spawn, toX, toY, SFX, dims:() => ({ CW, CH }),
+  assignPoses, resolve, obPlacement, spawn, toX, toY, SFX, award, pops,
+  dims:() => ({ CW, CH }),
+  // clear 10 obstacles in a row, then miss, and report how the score builds
+  comboTest(){
+    this.demo([]);
+    const p = players[0];
+    p.reset(false); p.cal = players[1].cal || p.cal;
+    const steps = [];
+    const mk = () => ({ type:'ICE', z:0.9, speed:0, side:null, armed:true,
+                        snapshot:0, done:false, result:null, shake:0 });
+    for (let i = 1; i <= 10; i++){
+      const before = p.score, c = p.combo;
+      award(p, mk(), true, performance.now());
+      steps.push({ clear:i, comboWas:c, gained:p.score - before, total:p.score });
+    }
+    const beforeMiss = { combo:p.combo, score:p.score };
+    award(p, mk(), false, performance.now());
+    const out = { perClear: steps, comboOnlyPoints: p.comboScore,
+                  bestCombo: p.bestCombo, bonusesPaid: Object.keys(p.comboHit),
+                  afterMiss: { combo:p.combo, score:p.score, wasCombo:beforeMiss.combo } };
+    p.reset(false); pops.length = 0;
+    return out;
+  },
   // force a known stage size so tests do not depend on which screen is showing
   setStage(w, h){ CW = w; CH = h; },
   realStage(){ resize(); },
@@ -1666,6 +1754,40 @@ window.__MG = { T, players, metricsOf, runDetectors, adaptCal, OB, VT, median,
       });
     });
     return 'frozen demo: ' + keys.join(', ');
+  },
+
+  // Run a whole round through the REAL stepPlay with a player who never acts,
+  // to measure pacing: how many moves you are asked for, and how much warning
+  // you get before each one goes live.
+  simulateRound(){
+    this.demo([]);                       // calibrated players, empty lanes
+    phase = GS.PLAY;
+    tPlay = 0; wave = 1;
+    for (const p of players){ p.reset(false); p.cal = players[0].cal; p.seen = true;
+                              p.lost = 0; p.spawnAt = 0; }
+    const dt = 1/30; let t = 0;
+    const seen = new Map(), warn = [];
+    const track = new Map();
+    while (t < T.sessionSecs){
+      const before = new Set(players[0].obstacles);
+      stepPlay(performance.now() + t*1000, dt);
+      if (phase !== GS.PLAY) break;
+      for (const o of players[0].obstacles){
+        if (!before.has(o) && !track.has(o)) track.set(o, t);          // spawn time
+        if (o.armed && track.has(o) && !o._w){ o._w = true; warn.push(t - track.get(o)); }
+      }
+      for (const o of players[0].obstacles) if (!seen.has(o)) seen.set(o, o.type);
+      t += dt;
+    }
+    const counts = {};
+    for (const ty of seen.values()) counts[ty] = (counts[ty] || 0) + 1;
+    const avg = warn.length ? warn.reduce((a,b)=>a+b,0)/warn.length : 0;
+    phase = GS.PAUSE; setScreen(null);
+    return { roundSeconds: T.sessionSecs, obstaclesPerPlayer: seen.size,
+             byType: counts,
+             secondsOfWarning: { min:+Math.min(...warn).toFixed(1),
+                                 avg:+avg.toFixed(1), max:+Math.max(...warn).toFixed(1) },
+             secondsPerMove: +(T.sessionSecs / seen.size).toFixed(1) };
   },
   // Build a 33-landmark frame for a standing body, with pose knobs applied.
   // Units are normalized frame coords, as MediaPipe reports them.

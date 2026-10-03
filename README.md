@@ -44,15 +44,26 @@ that it is cached.
 
 ## How long is a game?
 
-**5 minutes.** Waves step up every **45 seconds**, so a session runs through
-six waves, then the summary screen. Both numbers are at the top of the script:
+**2 minutes.** Waves step up every **40 seconds**, so a round runs through three
+waves and then the summary screen. Calibration adds about 3 seconds up front.
+
+Measured on the real game loop, one round gives each player about **30 moves,
+one every ~4 seconds**, with roughly **3 to 6 seconds of warning** before each
+one goes live (~4.5s on average). Spawning is randomised, so those vary a little
+run to run. Nothing overlaps — the next obstacle only appears once the current
+one is well down the track.
+
+All of it is tunable at the top of the script:
 
 ```js
-waveSecs: 45,       // seconds per wave
-sessionSecs: 300,   // seconds per session
+waveSecs: 40,        // seconds per wave
+sessionSecs: 120,    // seconds per round
+speed: { base: 0.105, perWave: 0.012, jitter: 0.02 },   // approach speed
+nextAt: 0.52,        // how far along before the next obstacle appears
 ```
 
-Calibration adds about 3 seconds up front.
+Lower `speed.base` for a gentler pace; raise `nextAt` for more breathing room
+between moves. `__MG.simulateRound()` re-measures after any change.
 
 ## How it works
 
@@ -64,16 +75,33 @@ coral). Obstacles rush toward you with perspective scaling, and the obstacle
 | Obstacle | Move | Wave |
 |---|---|---|
 | Hazard block | Punch it | 1 |
-| Low bar | Squat under | 1 |
 | Wide gate | Jumping jack | 1 |
+| Star | Reach both hands overhead | 1 |
 | Side wall | Dodge away from the mark | 2 |
-| Star | Reach both hands overhead | 2 |
-| Knee strip | High knees (4, alternating) | 3 |
-| Lunge gate | Side lunge to the mark | 3 |
-| Hop pads | Skater hops (2) | 4 |
-| Combo pad | Land the shown punches in order | 4 |
+| Knee strip | High knees (3, alternating) | 2 |
+| Combo pad | Land the shown punches in order | 3 |
 
-Clearing obstacles in a row builds a multiplier up to x8.
+Every obstacle carries its move name from the moment it appears, plus a bar
+that fills as it closes. When it reaches you the label turns lime, the bar
+flips to **GO**, lime brackets snap around it and a tick sounds — so *what* to
+do is readable early and *when* to do it is unmistakable.
+
+### Scoring
+
+Base points per obstacle, multiplied by your current streak, which climbs with
+every clear and caps at **x8**. A miss resets it. On top of that, reaching a
+streak milestone pays a one-off bonus:
+
+| Streak | Bonus |
+|---|---|
+| x3 | +150 |
+| x5 | +400 |
+| x8 | +1000 |
+
+Every point that lands is shown where it happened, and the summary reports how
+much of your total came from streaks rather than base clears. Ten clears in a
+row is worth **6,750** points, of which **5,750 comes from the streak** — so
+keeping a run going matters far more than any single move.
 
 **Keys:** `C` recalibrate · `S` skeleton · `M` mute · `P` pause · `E` end now
 
@@ -115,8 +143,10 @@ metres of distance makes a large difference.
   combos ask for your *left* and *right* arm rather than pretending to tell a
   jab from a cross. Punch shape (straight/hook) is shown but never required.
 - **Detection confidence varies by move.** Squats, jumping jacks, high knees,
-  overhead reaches and dodges are solid. Side lunges, skater hops and combos are
-  looser, because they depend on depth and on fast airborne frames.
+  overhead reaches and dodges are solid. Boxing combos are looser, because they
+  depend on depth. Squats, side lunges and skater hops were **removed from the
+  course** for being too demanding — their detectors are still in the code and
+  still pass their tests, so re-enabling one is a single `OB` entry.
 - **Two players who walk through each other** will swap identities at the
   crossing point — position is the only thing distinguishing them. Staying in
   your own half is rock solid (0 flips measured across fast lateral dodging).
@@ -130,9 +160,11 @@ The detectors can be measured without a camera — synthetic pose sequences are
 driven through the real code. In the browser console:
 
 ```js
-__MG.selfTest()      // 10 scripted reps of each move + false-positive checks
-__MG.scenarioTest()  // player-identity stickiness and the punch collision gate
-__MG.demo()          // frozen preview of every obstacle type, no camera needed
+__MG.selfTest()        // 10 scripted reps of each move + false-positive checks
+__MG.scenarioTest()    // player-identity stickiness and the punch collision gate
+__MG.simulateRound()   // pacing: moves per round and seconds of warning
+__MG.comboTest()       // how the score builds over a 10-clear streak
+__MG.demo()            // frozen preview of every obstacle type, no camera needed
 __MG.demo(['ICE'])   // ...or just the types you name
 ```
 
