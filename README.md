@@ -2,6 +2,8 @@
 
 **A workout you play, not one you get through.**
 
+https://play-perfect-pose.lovable.app/
+
 Motion Gym turns a webcam into a two-player obstacle course. Stand in front of
 the camera and the screen puts boxing gloves on your hands and a tracked
 skeleton on your body — then obstacles come at you, and the shape of each one
